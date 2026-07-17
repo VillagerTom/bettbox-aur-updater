@@ -4,7 +4,7 @@ AUR 包 [bettbox-compatible-bin](https://aur.archlinux.org/packages/bettbox-comp
 
 Bettbox 是一款使用 Mihomo (Clash Meta) 内核、基于 FlClash 早期版本进行重构的多平台代理客户端。
 
-AUR PKGBUILD 以子模块形式托管在 [`aur/`](./aur) 目录下。
+AUR PKGBUILD 以子模块形式托管在 [`aur/bettbox-compatible-bin/`](./aur/bettbox-compatible-bin) 目录下。
 
 ## 许可证
 

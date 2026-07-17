@@ -1,11 +1,6 @@
 name: Update AUR package
 
 on:
-  push:
-    branches:
-      - master
-    paths-ignore:
-      - '.github/**'
   schedule:
     - cron: '30 4,16 * * *'
   workflow_dispatch:
@@ -24,15 +19,27 @@ concurrency:
 
 jobs:
   update-version:
-    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - name: Setup SSH for AUR
+        run: |
+          mkdir -p -m 0700 ~/.ssh
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
+          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
+
+      - name: Init submodules (HTTPS for reading)
+        run: |
+          git submodule init
+          git config submodule.aur/bettbox-compatible-bin.url https://aur.archlinux.org/bettbox-compatible-bin.git
+          git submodule update --recursive
 
       - name: Check for new upstream release
         id: check
@@ -40,11 +47,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          cd aur/bettbox-compatible-bin
 
-          # Find the latest non-draft stable release with a compatible Linux deb
           latest_tag=""
           while IFS= read -r tag; do
-            # skip pre-release tags (contain '-pre')
             case "$tag" in *-pre*) continue ;; esac
             asset_count=$(gh release view "$tag" \
               --repo appshubcc/Bettbox \
@@ -69,8 +75,6 @@ jobs:
           echo "Latest upstream tag: $latest_tag"
 
           upstream_ver="${latest_tag#v}"
-          # Convert pre-release format: 1.17.10-pre1 -> 1.17.10.pre1
-          # arch_ver="$(echo "$upstream_ver" | sed 's/-pre/.pre/; s/-/.pre/')"
 
           cur_ver="$(sed -n 's/^pkgver=//p' PKGBUILD)"
           echo "cur_ver=$cur_ver  upstream_ver=$upstream_ver"
@@ -92,12 +96,12 @@ jobs:
           TAG: ${{ steps.check.outputs.latest_tag }}
         run: |
           set -euo pipefail
+          cd aur/bettbox-compatible-bin
 
           pkgname="bettbox-compatible-bin"
           _pkgname="Bettbox"
           arch="x86_64"
 
-          # --- Get SHA256 of the compatible .deb via API ---
           deb_sha256="$(gh release view "$TAG" \
             --repo appshubcc/Bettbox \
             --json assets \
@@ -105,7 +109,6 @@ jobs:
             sed 's/^sha256://')"
           echo "deb SHA256: $deb_sha256"
 
-          # --- Patch PKGBUILD ---
           sed -i \
             -e "s/^pkgver=.*/pkgver=${NEW_VER}/" \
             -e "s/^pkgrel=.*/pkgrel=1/" \
@@ -115,8 +118,6 @@ jobs:
           echo "=== Updated PKGBUILD ==="
           grep -E '^(pkgver|pkgrel|provides|sha256)' PKGBUILD
 
-          # --- Generate .SRCINFO from PKGBUILD ---
-          # Source PKGBUILD (rename 'source' array to avoid bash conflict)
           sed 's/^\(source\(_x86_64\)\?\)=/_\1=/' PKGBUILD > /tmp/pkgbuild_srcinfo.sh
           source /tmp/pkgbuild_srcinfo.sh
           {
@@ -141,7 +142,24 @@ jobs:
           echo "=== Generated .SRCINFO ==="
           cat .SRCINFO
 
-      - name: Commit back to this repo
+      - name: Commit and push submodule to AUR
+        if: steps.check.outputs.skip == 'false'
+        env:
+          NEW_VER: ${{ steps.check.outputs.new_version }}
+        run: |
+          set -euo pipefail
+          cd aur/bettbox-compatible-bin
+
+          git remote set-url origin ssh://aur@aur.archlinux.org/bettbox-compatible-bin.git
+          git config user.name "github-actions"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add PKGBUILD .SRCINFO
+          if ! git diff --cached --quiet; then
+            git commit -m "Update to v${NEW_VER}"
+            GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes" git push
+          fi
+
+      - name: Update parent submodule pointer
         if: steps.check.outputs.skip == 'false'
         env:
           NEW_VER: ${{ steps.check.outputs.new_version }}
@@ -149,62 +167,8 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add PKGBUILD .SRCINFO
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "Update to v${NEW_VER}"
+          git add aur/bettbox-compatible-bin
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: update AUR submodule to v${NEW_VER}"
             git push
           fi
-
-      - name: Push to AUR
-        if: steps.check.outputs.skip == 'false'
-        uses: ./.github/actions/push-to-aur
-        with:
-          ssh-private-key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit-message: Update to v${{ steps.check.outputs.new_version }}
-
-  push-modifications:
-    if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Ensure pkgrel changed
-        run: |
-          set -euo pipefail
-
-          BEFORE="${{ github.event.before }}"
-          AFTER="${{ github.event.after }}"
-
-          # Check there is a diff in PKGBUILD or .SRCINFO
-          git diff "$BEFORE" "$AFTER" -- PKGBUILD .SRCINFO > /dev/null 2>&1 || {
-            echo "Error: no changes to PKGBUILD or .SRCINFO in this push"
-            exit 1
-          }
-
-          # Extract the new pkgrel value from each file
-          pkgrel_pkgbuild=$(git diff "$BEFORE" "$AFTER" -- PKGBUILD | sed -n 's/^+pkgrel=//p')
-          pkgrel_srcinfo=$(git diff "$BEFORE" "$AFTER" -- .SRCINFO | sed -n 's/^+[[:space:]]*pkgrel[[:space:]]*=[[:space:]]*//p')
-
-          # Verify both files modified pkgrel
-          [ -n "$pkgrel_pkgbuild" ] || { echo "Error: pkgrel not modified in PKGBUILD"; exit 1; }
-          [ -n "$pkgrel_srcinfo" ] || { echo "Error: pkgrel not modified in .SRCINFO"; exit 1; }
-
-          # Verify they match
-          [ "$pkgrel_pkgbuild" = "$pkgrel_srcinfo" ] || {
-            echo "Error: pkgrel mismatch — PKGBUILD has '$pkgrel_pkgbuild', .SRCINFO has '$pkgrel_srcinfo'"
-            exit 1
-          }
-
-          echo "pkgrel consistency check passed: pkgrel=$pkgrel_pkgbuild"
-
-      - name: Push to AUR
-        uses: ./.github/actions/push-to-aur
-        with:
-          ssh-private-key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit-message: ${{ join(github.event.commits.*.message, '\n---\n') }}

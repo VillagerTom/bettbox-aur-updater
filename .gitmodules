@@ -1,0 +1,3 @@
+[submodule "aur/bettbox-compatible-bin"]
+	path = aur/bettbox-compatible-bin
+	url = ssh://aur@aur.archlinux.org/bettbox-compatible-bin.git
