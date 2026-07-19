@@ -1,0 +1,47 @@
+name: Sync from AUR
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH for AUR
+        run: |
+          mkdir -p -m 0700 ~/.ssh
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
+          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Init submodules
+        run: |
+          git submodule init
+          git config submodule.aur/bettbox-compatible-bin.url https://aur.archlinux.org/bettbox-compatible-bin.git
+          git submodule update --recursive
+
+      - name: Update submodule to latest AUR HEAD
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/aur -o IdentitiesOnly=yes
+        run: |
+          cd aur/bettbox-compatible-bin
+          git remote set-url origin ssh://aur@aur.archlinux.org/bettbox-compatible-bin.git
+          git fetch origin
+          git checkout origin/master
+
+      - name: Commit updated pointer
+        run: |
+          git config user.name "github-actions"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add aur/bettbox-compatible-bin
+          git diff --cached --quiet || {
+            git commit -m "chore: sync AUR submodule to latest"
+            git push
+          }
