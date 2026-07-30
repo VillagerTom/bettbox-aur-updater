@@ -1,0 +1,71 @@
+name: Sync from AUR
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup SSH for AUR
+        run: |
+          mkdir -p -m 0700 ~/.ssh
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
+          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Init submodules
+        run: git submodule update --init --recursive
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/aur -o IdentitiesOnly=yes
+
+      - name: Update submodules to latest AUR HEAD
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/aur -o IdentitiesOnly=yes
+        run: |
+          set -euo pipefail
+          {
+            echo "chore: sync AUR submodules to latest"
+            echo ""
+          } > /tmp/aur-commit-msg.txt
+          for sub in aur/*/; do
+            cd "$sub"
+            old_head=$(git rev-parse HEAD)
+            git fetch origin
+            git checkout origin/master 2>/dev/null || true
+            new_head=$(git rev-parse HEAD)
+            if [ "$old_head" != "$new_head" ]; then
+              {
+                echo "$sub"
+                git log --oneline "$old_head..$new_head" 2>/dev/null | sed 's/^/  /'
+                echo ""
+              } >> /tmp/aur-commit-msg.txt
+            fi
+            cd ../..
+          done
+
+      - name: Commit updated pointer
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/aur -o IdentitiesOnly=yes
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          updated=false
+          for sub in aur/*/; do
+            git add "$sub"
+            if ! git diff --cached --quiet -- "$sub"; then
+              updated=true
+            fi
+          done
+          if $updated; then
+            git commit -F /tmp/aur-commit-msg.txt
+            git push
+          fi

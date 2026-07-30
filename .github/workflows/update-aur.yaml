@@ -1,11 +1,6 @@
-name: Update AUR package
+name: Update AUR packages
 
 on:
-  push:
-    branches:
-      - master
-    paths-ignore:
-      - '.github/**'
   schedule:
     - cron: '30 4,16 * * *'
   workflow_dispatch:
@@ -23,188 +18,245 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  update-version:
-    if: github.event_name != 'push'
+  update-aur-packages:
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - name: Setup SSH for AUR
+        run: |
+          mkdir -p -m 0700 ~/.ssh
+          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
+          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
+      - name: Init submodules
+        run: git submodule update --init --recursive
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/aur -o IdentitiesOnly=yes
+
       - name: Check for new upstream release
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force }}
         run: |
           set -euo pipefail
 
-          # Find the latest non-draft stable release with a compatible Linux deb
+          # Find latest upstream release tag (shared by all packages)
           latest_tag=""
           while IFS= read -r tag; do
-            # skip pre-release tags (contain '-pre')
             case "$tag" in *-pre*) continue ;; esac
-            asset_count=$(gh release view "$tag" \
-              --repo appshubcc/Bettbox \
-              --json assets \
-              --jq '[.assets[] | select(.name | contains("linux-amd64-compatible"))] | length')
-            if [ "$asset_count" -gt 0 ]; then
-              latest_tag="$tag"
-              break
-            fi
-          done < <(gh release list \
-            --repo appshubcc/Bettbox \
-            --limit 30 \
-            --json tagName,isDraft \
+            latest_tag="$tag"
+            break
+          done < <(gh release list --repo appshubcc/Bettbox \
+            --limit 30 --json tagName,isDraft \
             --jq '.[] | select(.isDraft == false) | .tagName')
 
           if [ -z "$latest_tag" ]; then
-            echo "No upstream stable releases with compatible deb found"
+            echo "No upstream release found, skipping"
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "Latest upstream tag: $latest_tag"
-
           upstream_ver="${latest_tag#v}"
-          # Convert pre-release format: 1.17.10-pre1 -> 1.17.10.pre1
-          # arch_ver="$(echo "$upstream_ver" | sed 's/-pre/.pre/; s/-/.pre/')"
+          echo "Latest upstream: $latest_tag (v$upstream_ver)"
 
-          cur_ver="$(sed -n 's/^pkgver=//p' PKGBUILD)"
-          echo "cur_ver=$cur_ver  upstream_ver=$upstream_ver"
+          # Read current versions across all packages
+          current_vers=()
+          for sub in aur/*/; do
+            pkgname=$(sed -n 's/^pkgname=//p' "$sub/PKGBUILD")
+            pkgver=$(sed -n 's/^pkgver=//p' "$sub/PKGBUILD")
+            current_vers+=("$pkgver")
+            echo "$pkgname=$pkgver"
+          done > /tmp/aur-old-vers.txt
+          printf "Current versions: %s\n" "${current_vers[*]}"
 
-          if [ "$upstream_ver" = "$cur_ver" ] && [ "${{ inputs.force }}" != "true" ]; then
-            echo "Version unchanged, skipping"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "new_version=$upstream_ver" >> "$GITHUB_OUTPUT"
-            echo "latest_tag=$latest_tag" >> "$GITHUB_OUTPUT"
+          unique_vers=($(printf "%s\n" "${current_vers[@]}" | sort -u))
+          if [ "${#unique_vers[@]}" -gt 1 ]; then
+            echo "WARNING: Inconsistent package versions: ${unique_vers[*]}"
           fi
 
-      - name: Update PKGBUILD and .SRCINFO
+          needs_update=false
+          for ver in "${current_vers[@]}"; do
+            if [ "$ver" != "$upstream_ver" ]; then
+              needs_update=true
+              break
+            fi
+          done
+
+          if $needs_update; then
+            echo "Upstream differs, updating all packages"
+          elif [ "${FORCE:-false}" != "true" ]; then
+            echo "All packages up to date at v$upstream_ver, skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "tag=$latest_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Update AUR packages
         if: steps.check.outputs.skip == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
-          NEW_VER: ${{ steps.check.outputs.new_version }}
-          TAG: ${{ steps.check.outputs.latest_tag }}
+          TAG: ${{ steps.check.outputs.tag }}
+          FORCE: ${{ inputs.force }}
         run: |
           set -euo pipefail
+          new_ver="${TAG#v}"
 
-          pkgname="bettbox-compatible-bin"
-          _pkgname="Bettbox"
-          arch="x86_64"
+          for sub in aur/*/; do
+            cd "$sub"
+            pkgname="$(sed -n 's/^pkgname=//p' PKGBUILD)"
 
-          # --- Get SHA256 of the compatible .deb via API ---
-          deb_sha256="$(gh release view "$TAG" \
-            --repo appshubcc/Bettbox \
-            --json assets \
-            --jq '[.assets[] | select(.name | contains("linux-amd64-compatible.deb")) | .digest] | first' | \
-            sed 's/^sha256://')"
-          echo "deb SHA256: $deb_sha256"
+            echo "========================================="
+            echo "Updating: $pkgname to v$new_ver"
+            echo "========================================="
 
-          # --- Patch PKGBUILD ---
-          sed -i \
-            -e "s/^pkgver=.*/pkgver=${NEW_VER}/" \
-            -e "s/^pkgrel=.*/pkgrel=1/" \
-            -e "s|^provides=(\"${pkgname%-compatible-bin}=.*\")|provides=(\"${pkgname%-compatible-bin}=${NEW_VER}\")|" \
-            -e "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('${deb_sha256}')/" \
-            PKGBUILD
-          echo "=== Updated PKGBUILD ==="
-          grep -E '^(pkgver|pkgrel|provides|sha256)' PKGBUILD
+            # --- Get SHA256 per arch ---
+            declare -A sha256_map
+            case "$pkgname" in
+              *-compatible-bin)
+                sha=$(gh release view "$TAG" --repo appshubcc/Bettbox \
+                  --json assets \
+                  --jq '[.assets[] | select(.name | endswith("linux-amd64-compatible.deb")) | .digest] | first' | \
+                  sed 's/^sha256://')
+                sha256_map[x86_64]="$sha"
+                echo "deb SHA256 (x86_64): $sha"
+                ;;
+              *-bin)
+                for pair in "linux-amd64.deb|x86_64" "linux-arm64.deb|aarch64"; do
+                  suf="${pair%|*}"; arch_key="${pair#*|}"
+                  sha=$(gh release view "$TAG" --repo appshubcc/Bettbox \
+                    --json assets \
+                    --jq "[.assets[] | select(.name | endswith(\"$suf\")) | .digest] | first" | \
+                    sed 's/^sha256://')
+                  sha256_map[$arch_key]="$sha"
+                  echo "deb SHA256 ($arch_key): $sha"
+                done
+                ;;
+              *)
+                sha=$(gh api "/repos/appshubcc/Bettbox/tarball/$TAG" | sha256sum | cut -d' ' -f1)
+                sha256_map[source]="$sha"
+                echo "source SHA256: $sha"
+                ;;
+            esac
 
-          # --- Generate .SRCINFO from PKGBUILD ---
-          # Source PKGBUILD (rename 'source' array to avoid bash conflict)
-          sed 's/^\(source\(_x86_64\)\?\)=/_\1=/' PKGBUILD > /tmp/pkgbuild_srcinfo.sh
-          source /tmp/pkgbuild_srcinfo.sh
-          {
-            echo "pkgbase = ${pkgname}"
-            echo "	pkgdesc = ${pkgdesc}"
-            echo "	pkgver = ${pkgver}"
-            echo "	pkgrel = ${pkgrel}"
-            echo "	url = ${url}"
-            for a in "${arch[@]}"; do echo "	arch = $a"; done
-            for l in "${license[@]}"; do echo "	license = $l"; done
-            for d in "${depends[@]}"; do echo "	depends = $d"; done
-            for p in "${provides[@]}"; do echo "	provides = $p"; done
-            for c in "${conflicts[@]}"; do echo "	conflicts = $c"; done
-            for o in "${options[@]}"; do echo "	options = $o"; done
-            for s in "${_source[@]}"; do echo "	source = $s"; done
-            for s in "${sha256sums[@]}"; do echo "	sha256sums = $s"; done
-            for s in "${_source_x86_64[@]}"; do echo "	source_x86_64 = $s"; done
-            for s in "${sha256sums_x86_64[@]}"; do echo "	sha256sums_x86_64 = $s"; done
-            echo "pkgname = ${pkgname}"
-            echo ""
-          } >| .SRCINFO
-          echo "=== Generated .SRCINFO ==="
-          cat .SRCINFO
+            # --- Patch PKGBUILD ---
+            if [ "${FORCE:-false}" = "true" ]; then
+              current_pkgrel=$(sed -n 's/^pkgrel=//p' PKGBUILD)
+              new_pkgrel=$((current_pkgrel + 1))
+              echo "Force mode: bumping pkgrel $current_pkgrel → $new_pkgrel"
+            else
+              new_pkgrel=1
+            fi
+            sed -i "s/^pkgver=.*/pkgver=${new_ver}/" PKGBUILD
+            sed -i "s/^pkgrel=.*/pkgrel=${new_pkgrel}/" PKGBUILD
 
-      - name: Commit back to this repo
+            case "$pkgname" in
+              *-compatible-bin)
+                base="${pkgname%-compatible-bin}"
+                sed -i "s|^provides=(\"${base}=.*\")|provides=(\"${base}=${new_ver}\")|" PKGBUILD || true
+                sed -i "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('${sha256_map[x86_64]}')/" PKGBUILD
+                ;;
+              *-bin)
+                base="${pkgname%-bin}"
+                sed -i "s|^provides=(\"${base}=.*\")|provides=(\"${base}=${new_ver}\")|" PKGBUILD || true
+                sed -i "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('${sha256_map[x86_64]}')/" PKGBUILD
+                sed -i "s/^sha256sums_aarch64=.*/sha256sums_aarch64=('${sha256_map[aarch64]}')/" PKGBUILD
+                ;;
+              *)
+                sed -i "s/^sha256sums=.*/sha256sums=('${sha256_map[source]}')/" PKGBUILD
+                ;;
+            esac
+
+            echo "=== Updated PKGBUILD ==="
+            grep -E '^(pkgver|pkgrel|provides|sha256)' PKGBUILD
+
+            # --- Generate .SRCINFO ---
+            sed -E 's/^(source(_[a-z0-9_]+)?)=/_\1=/' PKGBUILD > /tmp/pkgbuild_srcinfo.sh
+            source /tmp/pkgbuild_srcinfo.sh
+            {
+              echo "pkgbase = ${pkgname}"
+              echo "	pkgdesc = ${pkgdesc}"
+              echo "	pkgver = ${pkgver}"
+              echo "	pkgrel = ${pkgrel}"
+              echo "	url = ${url}"
+              for a in "${arch[@]}"; do echo "	arch = $a"; done
+              for l in "${license[@]}"; do echo "	license = $l"; done
+              for d in "${depends[@]}"; do echo "	depends = $d"; done
+              for p in "${provides[@]}"; do echo "	provides = $p"; done
+              for c in "${conflicts[@]}"; do echo "	conflicts = $c"; done
+              for o in "${options[@]}"; do echo "	options = $o"; done
+              for s in "${_source[@]}"; do echo "	source = $s"; done
+              for s in "${sha256sums[@]}"; do echo "	sha256sums = $s"; done
+              for s in "${_source_x86_64[@]}"; do echo "	source_x86_64 = $s"; done
+              for s in "${sha256sums_x86_64[@]}"; do echo "	sha256sums_x86_64 = $s"; done
+              for s in "${_source_aarch64[@]}"; do echo "	source_aarch64 = $s"; done
+              for s in "${sha256sums_aarch64[@]}"; do echo "	sha256sums_aarch64 = $s"; done
+              echo "pkgname = ${pkgname}"
+              echo ""
+            } >| .SRCINFO
+            echo "=== Generated .SRCINFO ==="
+            cat .SRCINFO
+
+            # --- Commit and push to AUR ---
+            git remote set-url origin "ssh://aur@aur.archlinux.org/${pkgname}.git"
+            git config user.name "github-actions"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add PKGBUILD .SRCINFO
+            if ! git diff --cached --quiet; then
+              git commit -m "Update to v${new_ver}"
+              GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes" git push
+            fi
+
+            cd ../..
+          done
+
+      - name: Update parent submodule pointers
         if: steps.check.outputs.skip == 'false'
         env:
-          NEW_VER: ${{ steps.check.outputs.new_version }}
+          TAG: ${{ steps.check.outputs.tag }}
+          FORCE: ${{ inputs.force }}
         run: |
           set -euo pipefail
           git config user.name "github-actions"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add PKGBUILD .SRCINFO
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
+
+          unique_count=$(cut -d= -f2 < /tmp/aur-old-vers.txt | sort -u | wc -l)
+
+          if [ "${FORCE:-false}" = "true" ]; then
+            commit_msg="fix: force update source hashes of $TAG"
+            commit_body=""
+          elif [ "$unique_count" -gt 1 ]; then
+            commit_msg="fix: sync all packages to $TAG"
+            commit_body=$(while IFS='=' read -r pkgname old_ver; do
+              echo "$pkgname was $old_ver, now synced up"
+            done < /tmp/aur-old-vers.txt)
           else
-            git commit -m "Update to v${NEW_VER}"
-            git push
+            commit_msg="Update to $TAG"
+            commit_body=""
           fi
 
-      - name: Push to AUR
-        if: steps.check.outputs.skip == 'false'
-        uses: ./.github/actions/push-to-aur
-        with:
-          ssh-private-key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit-message: Update to v${{ steps.check.outputs.new_version }}
+          updated=false
+          for sub in aur/*/; do
+            git add "$sub"
+            if ! git diff --cached --quiet -- "$sub"; then
+              updated=true
+            fi
+          done
 
-  push-modifications:
-    if: github.event_name == 'push' && github.actor != 'github-actions[bot]'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Ensure pkgrel changed
-        run: |
-          set -euo pipefail
-
-          BEFORE="${{ github.event.before }}"
-          AFTER="${{ github.event.after }}"
-
-          # Check there is a diff in PKGBUILD or .SRCINFO
-          git diff "$BEFORE" "$AFTER" -- PKGBUILD .SRCINFO > /dev/null 2>&1 || {
-            echo "Error: no changes to PKGBUILD or .SRCINFO in this push"
-            exit 1
-          }
-
-          # Extract the new pkgrel value from each file
-          pkgrel_pkgbuild=$(git diff "$BEFORE" "$AFTER" -- PKGBUILD | sed -n 's/^+pkgrel=//p')
-          pkgrel_srcinfo=$(git diff "$BEFORE" "$AFTER" -- .SRCINFO | sed -n 's/^+[[:space:]]*pkgrel[[:space:]]*=[[:space:]]*//p')
-
-          # Verify both files modified pkgrel
-          [ -n "$pkgrel_pkgbuild" ] || { echo "Error: pkgrel not modified in PKGBUILD"; exit 1; }
-          [ -n "$pkgrel_srcinfo" ] || { echo "Error: pkgrel not modified in .SRCINFO"; exit 1; }
-
-          # Verify they match
-          [ "$pkgrel_pkgbuild" = "$pkgrel_srcinfo" ] || {
-            echo "Error: pkgrel mismatch — PKGBUILD has '$pkgrel_pkgbuild', .SRCINFO has '$pkgrel_srcinfo'"
-            exit 1
-          }
-
-          echo "pkgrel consistency check passed: pkgrel=$pkgrel_pkgbuild"
-
-      - name: Push to AUR
-        uses: ./.github/actions/push-to-aur
-        with:
-          ssh-private-key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit-message: ${{ join(github.event.commits.*.message, '\n---\n') }}
+          if $updated; then
+            if [ -n "$commit_body" ]; then
+              git commit -m "$commit_msg" -m "$commit_body"
+            else
+              git commit -m "$commit_msg"
+            fi
+            git push
+          fi
