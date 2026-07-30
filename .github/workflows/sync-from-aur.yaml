@@ -22,26 +22,50 @@ jobs:
           fetch-depth: 1
 
       - name: Init submodules
-        run: |
-          git submodule init
-          git config submodule.aur/bettbox-compatible-bin.url https://aur.archlinux.org/bettbox-compatible-bin.git
-          git submodule update --recursive
+        run: git submodule update --init --recursive
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/aur -o IdentitiesOnly=yes
 
-      - name: Update submodule to latest AUR HEAD
+      - name: Update submodules to latest AUR HEAD
         env:
           GIT_SSH_COMMAND: ssh -i ~/.ssh/aur -o IdentitiesOnly=yes
         run: |
-          cd aur/bettbox-compatible-bin
-          git remote set-url origin ssh://aur@aur.archlinux.org/bettbox-compatible-bin.git
-          git fetch origin
-          git checkout origin/master
+          set -euo pipefail
+          {
+            echo "chore: sync AUR submodules to latest"
+            echo ""
+          } > /tmp/aur-commit-msg.txt
+          for sub in aur/*/; do
+            cd "$sub"
+            old_head=$(git rev-parse HEAD)
+            git fetch origin
+            git checkout origin/master 2>/dev/null || true
+            new_head=$(git rev-parse HEAD)
+            if [ "$old_head" != "$new_head" ]; then
+              {
+                echo "$sub"
+                git log --oneline "$old_head..$new_head" 2>/dev/null | sed 's/^/  /'
+                echo ""
+              } >> /tmp/aur-commit-msg.txt
+            fi
+            cd ../..
+          done
 
       - name: Commit updated pointer
+        env:
+          GIT_SSH_COMMAND: ssh -i ~/.ssh/aur -o IdentitiesOnly=yes
         run: |
+          set -euo pipefail
           git config user.name "github-actions"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add aur/bettbox-compatible-bin
-          git diff --cached --quiet || {
-            git commit -m "chore: sync AUR submodule to latest"
+          updated=false
+          for sub in aur/*/; do
+            git add "$sub"
+            if ! git diff --cached --quiet -- "$sub"; then
+              updated=true
+            fi
+          done
+          if $updated; then
+            git commit -F /tmp/aur-commit-msg.txt
             git push
-          }
+          fi
