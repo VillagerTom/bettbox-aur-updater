@@ -54,10 +54,14 @@ jobs:
       - name: Commit updated pointer
         env:
           GIT_SSH_COMMAND: ssh -i ~/.ssh/aur -o IdentitiesOnly=yes
+          GIT_NAME: ${{ secrets.GIT_NAME }}
+          GIT_EMAIL: ${{ secrets.GIT_EMAIL }}
         run: |
           set -euo pipefail
           git config user.name "github-actions"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          export GIT_COMMITTER_NAME="${GIT_NAME:-github-actions}"
+          export GIT_COMMITTER_EMAIL="${GIT_EMAIL:-41898282+github-actions[bot]@users.noreply.github.com}"
           updated=false
           for sub in aur/*/; do
             git add "$sub"

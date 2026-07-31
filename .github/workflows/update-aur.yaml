@@ -107,6 +107,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.check.outputs.tag }}
           FORCE: ${{ inputs.force }}
+          GIT_NAME: ${{ secrets.GIT_NAME }}
+          GIT_EMAIL: ${{ secrets.GIT_EMAIL }}
         run: |
           set -euo pipefail
           new_ver="${TAG#v}"
@@ -208,8 +210,8 @@ jobs:
 
             # --- Commit and push to AUR ---
             git remote set-url origin "ssh://aur@aur.archlinux.org/${pkgname}.git"
-            git config user.name "github-actions"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git config user.name "${GIT_NAME:-github-actions}"
+            git config user.email "${GIT_EMAIL:-41898282+github-actions[bot]@users.noreply.github.com}"
             git add PKGBUILD .SRCINFO
             if ! git diff --cached --quiet; then
               git commit -m "Update to v${new_ver}"
@@ -224,10 +226,17 @@ jobs:
         env:
           TAG: ${{ steps.check.outputs.tag }}
           FORCE: ${{ inputs.force }}
+          GIT_NAME: ${{ secrets.GIT_NAME }}
+          GIT_EMAIL: ${{ secrets.GIT_EMAIL }}
         run: |
           set -euo pipefail
           git config user.name "github-actions"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            export GIT_COMMITTER_NAME="${GIT_NAME:-github-actions}"
+            export GIT_COMMITTER_EMAIL="${GIT_EMAIL:-41898282+github-actions[bot]@users.noreply.github.com}"
+          fi
 
           unique_count=$(cut -d= -f2 < /tmp/aur-old-vers.txt | sort -u | wc -l)
 
