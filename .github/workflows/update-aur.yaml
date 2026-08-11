@@ -215,7 +215,7 @@ jobs:
             git add PKGBUILD .SRCINFO
             if ! git diff --cached --quiet; then
               git commit -m "Update to v${new_ver}"
-              GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes" git push
+              GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes" git push origin HEAD:master
             fi
 
             cd ../..
