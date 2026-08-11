@@ -6,6 +6,7 @@ AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，当前包含：
 
 | AUR 包 | 架构 | 类型 | 子模块路径 |
 |--------|------|------|-----------|
+| [bettbox](https://aur.archlinux.org/packages/bettbox) | x86_64 / aarch64 | 源码构建 | `aur/bettbox/` |
 | [bettbox-compatible](https://aur.archlinux.org/packages/bettbox-compatible) | x86_64 | 源码构建 | `aur/bettbox-compatible/` |
 | [bettbox-compatible-bin](https://aur.archlinux.org/packages/bettbox-compatible-bin) | x86_64 | 预编译二进制 | `aur/bettbox-compatible-bin/` |
 
