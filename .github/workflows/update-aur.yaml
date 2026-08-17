@@ -113,6 +113,27 @@ jobs:
           set -euo pipefail
           new_ver="${TAG#v}"
 
+          # Replace a sha256sums array (possibly multi-line) with a single new hash.
+          # Plain `sed s/^sha256sums=.*/.../` only rewrites the first line of a
+          # multi-line array and sed address ranges mishandle one-line arrays, so
+          # use awk to replace the whole block in both cases.
+          set_sha256() {
+            local var="$1" sha="$2"
+            awk -v var="${var}=" -v new="${var}=('${sha}')" '
+              index($0, var) == 1 {
+                print new
+                if (index($0, ")") > 0) p=0; else p=1
+                next
+              }
+              p {
+                if (index($0, ")") > 0) p=0
+                next
+              }
+              { print }
+            ' PKGBUILD > PKGBUILD.tmp
+            mv PKGBUILD.tmp PKGBUILD
+          }
+
           for sub in aur/*/; do
             cd "$sub"
             pkgname="$(sed -n 's/^pkgname=//p' PKGBUILD)"
@@ -165,46 +186,37 @@ jobs:
               *-compatible-bin)
                 base="${pkgname%-compatible-bin}"
                 sed -i "s|^provides=(\"${base}=.*\")|provides=(\"${base}=${new_ver}\")|" PKGBUILD || true
-                sed -i "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('${sha256_map[x86_64]}')/" PKGBUILD
+                set_sha256 sha256sums_x86_64 "${sha256_map[x86_64]}"
                 ;;
               *-bin)
                 base="${pkgname%-bin}"
                 sed -i "s|^provides=(\"${base}=.*\")|provides=(\"${base}=${new_ver}\")|" PKGBUILD || true
-                sed -i "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('${sha256_map[x86_64]}')/" PKGBUILD
-                sed -i "s/^sha256sums_aarch64=.*/sha256sums_aarch64=('${sha256_map[aarch64]}')/" PKGBUILD
+                set_sha256 sha256sums_x86_64 "${sha256_map[x86_64]}"
+                set_sha256 sha256sums_aarch64 "${sha256_map[aarch64]}"
                 ;;
               *)
-                sed -i "s/^sha256sums=.*/sha256sums=('${sha256_map[source]}')/" PKGBUILD
+                set_sha256 sha256sums "${sha256_map[source]}"
                 ;;
             esac
 
             echo "=== Updated PKGBUILD ==="
             grep -E '^(pkgver|pkgrel|provides|sha256)' PKGBUILD
 
-            # --- Generate .SRCINFO ---
-            sed -E 's/^(source(_[a-z0-9_]+)?)=/_\1=/' PKGBUILD > /tmp/pkgbuild_srcinfo.sh
-            source /tmp/pkgbuild_srcinfo.sh
-            {
-              echo "pkgbase = ${pkgname}"
-              echo "	pkgdesc = ${pkgdesc}"
-              echo "	pkgver = ${pkgver}"
-              echo "	pkgrel = ${pkgrel}"
-              echo "	url = ${url}"
-              for a in "${arch[@]}"; do echo "	arch = $a"; done
-              for l in "${license[@]}"; do echo "	license = $l"; done
-              for d in "${depends[@]}"; do echo "	depends = $d"; done
-              for p in "${provides[@]}"; do echo "	provides = $p"; done
-              for c in "${conflicts[@]}"; do echo "	conflicts = $c"; done
-              for o in "${options[@]}"; do echo "	options = $o"; done
-              for s in "${_source[@]}"; do echo "	source = $s"; done
-              for s in "${sha256sums[@]}"; do echo "	sha256sums = $s"; done
-              for s in "${_source_x86_64[@]}"; do echo "	source_x86_64 = $s"; done
-              for s in "${sha256sums_x86_64[@]}"; do echo "	sha256sums_x86_64 = $s"; done
-              for s in "${_source_aarch64[@]}"; do echo "	source_aarch64 = $s"; done
-              for s in "${sha256sums_aarch64[@]}"; do echo "	sha256sums_aarch64 = $s"; done
-              echo "pkgname = ${pkgname}"
-              echo ""
-            } >| .SRCINFO
+            # --- Generate .SRCINFO (canonical) ---
+            # makepkg --printsrcinfo is the AUR-endorsed way to emit .SRCINFO. It
+            # handles makepkg-only constructs (top-level `case "$CARCH"`, arrays,
+            # functions) internally, so we no longer `source` the PKGBUILD.
+            # makepkg refuses to run as root, so map the current (runner) user.
+            docker run --rm \
+              --user "$(id -u):$(id -g)" \
+              -e HOME=/tmp \
+              -e BUILDDIR=/tmp/build \
+              -e PKGDEST=/tmp/dest \
+              -e SRCDEST=/tmp/src \
+              -v "$PWD":/work \
+              -w /work \
+              archlinux:latest \
+              sh -c 'mkdir -p /tmp/build /tmp/dest /tmp/src && makepkg --printsrcinfo' > .SRCINFO
             echo "=== Generated .SRCINFO ==="
             cat .SRCINFO
 
