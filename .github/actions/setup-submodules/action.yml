@@ -1,0 +1,27 @@
+name: Setup submodules
+description: Write the AUR SSH key to ~/.ssh and initialize submodules over SSH
+
+inputs:
+  ssh-key:
+    description: AUR SSH private key (AUR_SSH_PRIVATE_KEY secret)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Write AUR SSH key
+      shell: bash
+      env:
+        AUR_SSH_PRIVATE_KEY: ${{ inputs.ssh-key }}
+      run: |
+        set -euo pipefail
+        mkdir -p -m 0700 ~/.ssh
+        ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
+        echo "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+        chmod 600 ~/.ssh/aur
+
+    - name: Init submodules
+      shell: bash
+      env:
+        GIT_SSH_COMMAND: ssh -i ~/.ssh/aur -o IdentitiesOnly=yes
+      run: git submodule update --init --recursive

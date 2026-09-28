@@ -29,22 +29,15 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Setup SSH for AUR
-        run: |
-          mkdir -p -m 0700 ~/.ssh
-          ssh-keyscan aur.archlinux.org >> ~/.ssh/known_hosts 2>/dev/null
-          echo "${{ secrets.AUR_SSH_PRIVATE_KEY }}" > ~/.ssh/aur
-          chmod 600 ~/.ssh/aur
-
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
-      - name: Init submodules
-        run: git submodule update --init --recursive
-        env:
-          GIT_SSH_COMMAND: ssh -i ~/.ssh/aur -o IdentitiesOnly=yes
+      - name: Setup submodules
+        uses: ./.github/actions/setup-submodules
+        with:
+          ssh-key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
 
       - name: Check for new upstream release
         id: check
@@ -235,7 +228,8 @@ jobs:
             cd ../..
           done
 
-      - name: Update parent submodule pointers
+      - name: Build parent pointer commit message
+        id: pointer
         if: steps.check.outputs.skip == 'false' && !inputs.dry_run
         env:
           TAG: ${{ steps.check.outputs.tag }}
@@ -244,42 +238,32 @@ jobs:
           GIT_EMAIL: ${{ secrets.GIT_EMAIL }}
         run: |
           set -euo pipefail
-          git config user.name "github-actions"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            export GIT_COMMITTER_NAME="${GIT_NAME:-github-actions}"
-            export GIT_COMMITTER_EMAIL="${GIT_EMAIL:-41898282+github-actions[bot]@users.noreply.github.com}"
-          fi
-
           unique_count=$(cut -d= -f2 < /tmp/aur-old-vers.txt | sort -u | wc -l)
-
-          if [ "${FORCE:-false}" = "true" ]; then
-            commit_msg="fix: force update source hashes of $TAG"
-            commit_body=""
-          elif [ "$unique_count" -gt 1 ]; then
-            commit_msg="fix: sync all packages to $TAG"
-            commit_body=$(while IFS='=' read -r pkgname old_ver; do
-              echo "$pkgname was $old_ver, now synced up"
-            done < /tmp/aur-old-vers.txt)
-          else
-            commit_msg="Update to $TAG"
-            commit_body=""
-          fi
-
-          updated=false
-          for sub in aur/*/; do
-            git add "$sub"
-            if ! git diff --cached --quiet -- "$sub"; then
-              updated=true
-            fi
-          done
-
-          if $updated; then
-            if [ -n "$commit_body" ]; then
-              git commit -m "$commit_msg" -m "$commit_body"
+          {
+            if [ "${FORCE:-false}" = "true" ]; then
+              echo "fix: force update source hashes of $TAG"
+            elif [ "$unique_count" -gt 1 ]; then
+              echo "fix: sync all packages to $TAG"
+              echo ""
+              while IFS='=' read -r pkgname old_ver; do
+                echo "$pkgname was $old_ver, now synced up"
+              done < /tmp/aur-old-vers.txt
             else
-              git commit -m "$commit_msg"
+              echo "Update to $TAG"
             fi
-            git push
+          } > /tmp/aur-commit-msg.txt
+
+          # Manual (workflow_dispatch) runs sign the parent-pointer commit as the
+          # owner; scheduled runs leave committer unset so it follows github-actions.
+          if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]; then
+            echo "committer-name=${GIT_NAME}" >> "$GITHUB_OUTPUT"
+            echo "committer-email=${GIT_EMAIL}" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Update parent submodule pointers
+        if: steps.check.outputs.skip == 'false' && !inputs.dry_run
+        uses: ./.github/actions/commit-submodule-pointers
+        with:
+          message-file: /tmp/aur-commit-msg.txt
+          committer-name: ${{ steps.pointer.outputs.committer-name }}
+          committer-email: ${{ steps.pointer.outputs.committer-email }}

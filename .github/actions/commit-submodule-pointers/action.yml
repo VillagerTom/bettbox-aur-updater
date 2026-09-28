@@ -1,0 +1,72 @@
+name: Commit submodule pointers
+description: Stage aur/* submodule pointer changes, commit with -F, and push to the parent repo
+
+inputs:
+  message-file:
+    description: Path to a file with the commit message (subject, optional blank line, body)
+    required: true
+  author-name:
+    description: Author name for the commit
+    required: false
+    default: github-actions
+  author-email:
+    description: Author email for the commit
+    required: false
+    default: 41898282+github-actions[bot]@users.noreply.github.com
+  committer-name:
+    description: Override committer name (empty = committer follows author). Manual triggers pass the owner identity.
+    required: false
+    default: ''
+  committer-email:
+    description: Override committer email (empty = committer follows author)
+    required: false
+    default: ''
+outputs:
+  updated:
+    description: 'true if pointers were committed and pushed'
+    value: ${{ steps.commit.outputs.updated }}
+
+runs:
+  using: composite
+  steps:
+    - name: Stage pointers and commit
+      id: commit
+      shell: bash
+      env:
+        AUTHOR_NAME: ${{ inputs.author-name }}
+        AUTHOR_EMAIL: ${{ inputs.author-email }}
+        COMMITTER_NAME: ${{ inputs.committer-name }}
+        COMMITTER_EMAIL: ${{ inputs.committer-email }}
+        MSG_FILE: ${{ inputs.message-file }}
+      run: |
+        set -euo pipefail
+
+        git config user.name "$AUTHOR_NAME"
+        git config user.email "$AUTHOR_EMAIL"
+        if [ -n "$COMMITTER_NAME" ]; then
+          export GIT_COMMITTER_NAME="$COMMITTER_NAME"
+          export GIT_COMMITTER_EMAIL="$COMMITTER_EMAIL"
+        fi
+
+        if [ ! -s "$MSG_FILE" ]; then
+          echo "ERROR: commit message file is empty: $MSG_FILE" >&2
+          exit 1
+        fi
+
+        updated=false
+        for sub in aur/*/; do
+          git add "$sub"
+          if ! git diff --cached --quiet -- "$sub"; then
+            updated=true
+          fi
+        done
+
+        if ! $updated; then
+          echo "No submodule pointer changes, skipping commit"
+          echo "updated=false" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        git commit -F "$MSG_FILE"
+        git push
+        echo "updated=true" >> "$GITHUB_OUTPUT"
