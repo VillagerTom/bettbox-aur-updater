@@ -1,4 +1,5 @@
 name: Update AUR packages
+run-name: Update AUR packages${{ inputs.dry_run && ' (dry-run)' || '' }}
 
 on:
   schedule:
@@ -7,6 +8,11 @@ on:
     inputs:
       force:
         description: Force update even if version is the same
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: Preview PKGBUILD/.SRCINFO diffs without committing or pushing
         required: false
         type: boolean
         default: false
@@ -107,6 +113,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.check.outputs.tag }}
           FORCE: ${{ inputs.force }}
+          DRY_RUN: ${{ inputs.dry_run }}
           GIT_NAME: ${{ secrets.GIT_NAME }}
           GIT_EMAIL: ${{ secrets.GIT_EMAIL }}
         run: |
@@ -210,21 +217,26 @@ jobs:
             echo "=== Generated .SRCINFO ==="
             cat .SRCINFO
 
-            # --- Commit and push to AUR ---
-            git remote set-url origin "ssh://aur@aur.archlinux.org/${pkgname}.git"
-            git config user.name "${GIT_NAME:-github-actions}"
-            git config user.email "${GIT_EMAIL:-41898282+github-actions[bot]@users.noreply.github.com}"
-            git add PKGBUILD .SRCINFO
-            if ! git diff --cached --quiet; then
-              git commit -m "Update to v${new_ver}"
-              GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes" git push origin HEAD:master
+            # --- Commit and push to AUR (skipped in dry-run) ---
+            if [ "${DRY_RUN:-false}" = "true" ]; then
+              echo "=== DRY RUN: previewing diff for ${pkgname} (no commit/push) ==="
+              git --no-pager diff PKGBUILD .SRCINFO
+            else
+              git remote set-url origin "ssh://aur@aur.archlinux.org/${pkgname}.git"
+              git config user.name "${GIT_NAME:-github-actions}"
+              git config user.email "${GIT_EMAIL:-41898282+github-actions[bot]@users.noreply.github.com}"
+              git add PKGBUILD .SRCINFO
+              if ! git diff --cached --quiet; then
+                git commit -m "Update to v${new_ver}"
+                GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes" git push origin HEAD:master
+              fi
             fi
 
             cd ../..
           done
 
       - name: Update parent submodule pointers
-        if: steps.check.outputs.skip == 'false'
+        if: steps.check.outputs.skip == 'false' && !inputs.dry_run
         env:
           TAG: ${{ steps.check.outputs.tag }}
           FORCE: ${{ inputs.force }}
