@@ -7,3 +7,12 @@
 [submodule "aur/bettbox"]
 	path = aur/bettbox
 	url = ssh://aur@aur.archlinux.org/bettbox.git
+[submodule "aur/bettbox-pre"]
+	path = aur/bettbox-pre
+	url = ssh://aur@aur.archlinux.org/bettbox-pre.git
+[submodule "aur/bettbox-compatible-pre"]
+	path = aur/bettbox-compatible-pre
+	url = ssh://aur@aur.archlinux.org/bettbox-compatible-pre.git
+[submodule "aur/bettbox-compatible-pre-bin"]
+	path = aur/bettbox-compatible-pre-bin
+	url = ssh://aur@aur.archlinux.org/bettbox-compatible-pre-bin.git
