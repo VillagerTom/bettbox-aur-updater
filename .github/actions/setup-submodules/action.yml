@@ -24,4 +24,9 @@ runs:
       shell: bash
       env:
         GIT_SSH_COMMAND: ssh -i ~/.ssh/aur -o IdentitiesOnly=yes
-      run: git submodule update --init --recursive
+      run: |
+        # Container jobs (update-aur) run git as root against a workspace owned
+        # by the runner user, which git's safe.directory check rejects. Mark it
+        # safe before touching submodules; harmless on runner-hosted jobs.
+        git config --global --add safe.directory '*'
+        git submodule update --init --recursive
