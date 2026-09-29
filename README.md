@@ -1,24 +1,36 @@
 # bettbox-aur-updater
 
- [**Bettbox**](https://github.com/appshubcc/Bettbox) 相关 AUR 包的管理仓库，使用 CI 自动维护版本更新。
+[**Bettbox**](https://github.com/appshubcc/Bettbox) 相关 AUR 包的管理仓库，使用 CI 自动维护版本更新。
 
-AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，当前包含：
+AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，分 **stable / pre 双通道**，共 6 个包：
 
-| AUR 包 | 架构 | 类型 | 子模块路径 |
-|--------|------|------|-----------|
-| [bettbox](https://aur.archlinux.org/packages/bettbox) | x86_64 / aarch64 | 源码构建 | `aur/bettbox/` |
-| [bettbox-compatible](https://aur.archlinux.org/packages/bettbox-compatible) | x86_64 | 源码构建 | `aur/bettbox-compatible/` |
-| [bettbox-compatible-bin](https://aur.archlinux.org/packages/bettbox-compatible-bin) | x86_64 | 预编译二进制 | `aur/bettbox-compatible-bin/` |
+| AUR 包 | 通道 | 架构 | 类型 | 子模块路径 |
+|--------|------|------|------|-----------|
+| [bettbox](https://aur.archlinux.org/packages/bettbox) | stable | x86_64 / aarch64 | 源码构建 | `aur/bettbox/` |
+| [bettbox-compatible](https://aur.archlinux.org/packages/bettbox-compatible) | stable | x86_64 | 源码构建（`GOAMD64=v1`） | `aur/bettbox-compatible/` |
+| [bettbox-compatible-bin](https://aur.archlinux.org/packages/bettbox-compatible-bin) | stable | x86_64 | 预编译二进制 | `aur/bettbox-compatible-bin/` |
+| [bettbox-pre](https://aur.archlinux.org/packages/bettbox-pre) | pre | x86_64 / aarch64 | 源码构建 | `aur/bettbox-pre/` |
+| [bettbox-compatible-pre](https://aur.archlinux.org/packages/bettbox-compatible-pre) | pre | x86_64 | 源码构建（`GOAMD64=v1`） | `aur/bettbox-compatible-pre/` |
+| [bettbox-compatible-pre-bin](https://aur.archlinux.org/packages/bettbox-compatible-pre-bin) | pre | x86_64 | 预编译二进制 | `aur/bettbox-compatible-pre-bin/` |
+
+- 双通道互相独立：stable 跟踪最新正式 release（`v1.19.3`），pre 跟踪最高 `-pre` release（`v1.19.4-pre1`，pkgver 记作 `1.19.4pre1`、无连字符）。
+- **同通道内原子更新**：一个通道内的 3 个包永远同一版本；两通道互不干扰。
+- 6 包安装结构一致（`usr/lib/bettbox`、`usr/bin/bettbox` 软链、`provides=bettbox=$pkgver`），且互相 `conflicts`，同一时间只能安装其一。
 
 ## 工作流程
 
 ### [`update-aur.yaml`](.github/workflows/update-aur.yaml)
 
-定时（每天 4:30 / 16:30 UTC）或手动触发：
+定时（每天 4:30 / 16:30 UTC）或手动触发。job 运行在 `archlinux:base-devel` 容器内，使用 Arch 原生工具链：
 
-1. **Check** — 查询 [appshubcc/Bettbox](https://github.com/appshubcc/Bettbox) 最新 release tag，对比所有子模块当前版本
-2. **Update** — 遍历 `aur/*/`，从上游获取对应的 SHA256，更新 PKGBUILD / .SRCINFO，push 到 aur.archlinux.org
+1. **Check** — 每包按自己的 `.nvchecker.toml`（GitHub releases API）解析通道目标版本
+2. **Update** — 遍历 `aur/*/`：更新 pkgver/pkgrel，`updpkgsums` 刷新 checksum，`makepkg --printsrcinfo` 重生成 `.SRCINFO`，push 到 aur.archlinux.org
 3. **Parent pointer** — 更新父仓库的子模块指针
+
+手动触发可传两个 input：
+
+- `force`：版本无变化也提 `pkgrel`（+1），用于刷新 checksum / 强制重推
+- `dry_run`：只预览 PKGBUILD/.SRCINFO 的 diff，不提交不推送（与 `force` 组合 = 预览 pkgrel+1 的产物）
 
 ### [`sync-from-aur.yaml`](.github/workflows/sync-from-aur.yaml)
 
@@ -27,6 +39,9 @@ AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，当前包含：
 ## 子模块管理
 
 ```bash
+# 首次克隆
+git clone --recurse-submodules <url>
+
 # 添加新 AUR 包
 git submodule add ssh://aur@aur.archlinux.org/<pkgname>.git aur/<pkgname>
 ```
