@@ -21,7 +21,7 @@ jobs:
 
       - name: Update submodules to latest AUR HEAD
         env:
-          GIT_SSH_COMMAND: ssh -i ~/.ssh/aur -o IdentitiesOnly=yes
+          GIT_SSH_COMMAND: ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts
         run: |
           set -euo pipefail
           {

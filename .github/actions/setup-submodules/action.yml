@@ -23,7 +23,10 @@ runs:
     - name: Init submodules
       shell: bash
       env:
-        GIT_SSH_COMMAND: ssh -i ~/.ssh/aur -o IdentitiesOnly=yes
+        # ssh resolves ~/.ssh from the passwd home (/root in the container), not
+        # $HOME (/github/home), so known_hosts written by the step above would
+        # be missed. Explicit absolute paths keep both in $HOME.
+        GIT_SSH_COMMAND: ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts
       run: |
         # Container jobs (update-aur) run git as root against a workspace owned
         # by the runner user, which git's safe.directory check rejects. Mark it

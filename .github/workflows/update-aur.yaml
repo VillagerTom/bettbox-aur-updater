@@ -222,7 +222,7 @@ jobs:
                 git commit -m "Update to v${new_ver}"
                 old_ver=$(awk -F= -v p="$pkgname" '$1==p {print $2}' /tmp/aur-old-vers.txt)
                 echo "${pkgname}: v${old_ver} -> v${new_ver}" >> /tmp/aur-updated.txt
-                GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes" git push origin HEAD:master
+                GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts" git push origin HEAD:master
               fi
             fi
 
