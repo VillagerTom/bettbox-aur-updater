@@ -26,9 +26,23 @@ concurrency:
 jobs:
   update-aur-packages:
     runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
     permissions:
       contents: write
     steps:
+      - name: Install Arch toolchain
+        # The job runs inside an Arch container so the update loop uses the
+        # same makepkg/sed/awk the package will be built with (lilac-style).
+        # nodejs is required by JavaScript Actions (actions/checkout) in an
+        # Actions container job. nvchecker and pacman-contrib (updpkgsums)
+        # come from the Arch repos.
+        run: |
+          set -euo pipefail
+          pacman -Sy --noconfirm > /dev/null
+          pacman -S --noconfirm --needed \
+            git openssh jq nvchecker pacman-contrib nodejs > /dev/null
+
       - name: Checkout
         uses: actions/checkout@v6
         with:
@@ -39,127 +53,132 @@ jobs:
         with:
           ssh-key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
 
-      - name: Check for new upstream release
+      - name: Check and update AUR packages
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
-          FORCE: ${{ inputs.force }}
-        run: |
-          set -euo pipefail
-
-          # Find latest upstream release tag (shared by all packages)
-          latest_tag=""
-          while IFS= read -r tag; do
-            case "$tag" in *-pre*) continue ;; esac
-            latest_tag="$tag"
-            break
-          done < <(gh release list --repo appshubcc/Bettbox \
-            --limit 30 --json tagName,isDraft \
-            --jq '.[] | select(.isDraft == false) | .tagName')
-
-          if [ -z "$latest_tag" ]; then
-            echo "No upstream release found, skipping"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          upstream_ver="${latest_tag#v}"
-          echo "Latest upstream: $latest_tag (v$upstream_ver)"
-
-          # Read current versions across all packages
-          current_vers=()
-          for sub in aur/*/; do
-            pkgname=$(sed -n 's/^pkgname=//p' "$sub/PKGBUILD")
-            pkgver=$(sed -n 's/^pkgver=//p' "$sub/PKGBUILD")
-            current_vers+=("$pkgver")
-            echo "$pkgname=$pkgver"
-          done > /tmp/aur-old-vers.txt
-          printf "Current versions: %s\n" "${current_vers[*]}"
-
-          unique_vers=($(printf "%s\n" "${current_vers[@]}" | sort -u))
-          if [ "${#unique_vers[@]}" -gt 1 ]; then
-            echo "WARNING: Inconsistent package versions: ${unique_vers[*]}"
-          fi
-
-          needs_update=false
-          for ver in "${current_vers[@]}"; do
-            if [ "$ver" != "$upstream_ver" ]; then
-              needs_update=true
-              break
-            fi
-          done
-
-          if $needs_update; then
-            echo "Upstream differs, updating all packages"
-          elif [ "${FORCE:-false}" != "true" ]; then
-            echo "All packages up to date at v$upstream_ver, skipping"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          echo "skip=false" >> "$GITHUB_OUTPUT"
-          echo "tag=$latest_tag" >> "$GITHUB_OUTPUT"
-
-      - name: Update AUR packages
-        if: steps.check.outputs.skip == 'false'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.check.outputs.tag }}
           FORCE: ${{ inputs.force }}
           DRY_RUN: ${{ inputs.dry_run }}
           GIT_NAME: ${{ secrets.GIT_NAME }}
           GIT_EMAIL: ${{ secrets.GIT_EMAIL }}
         run: |
           set -euo pipefail
-          new_ver="${TAG#v}"
 
-          # The source tarball is the first sha256sums entry; the other two
-          # (restart-bettbox.hook, bettbox.desktop) are left as-is.
-          set_sha256_source() {
-            local sha="$1"
-            awk -v sha="$sha" '
-              /^sha256sums=\(/ { sub(/[0-9a-f]{64}/, sha) }
-              { print }
-            ' PKGBUILD > PKGBUILD.tmp
-            mv PKGBUILD.tmp PKGBUILD
+          # makepkg refuses to run as root, and the AUR tooling (updpkgsums
+          # writes hashes back into PKGBUILD) needs a writable workspace, so
+          # all makepkg-family calls below run as a throwaway 'builder' user.
+          # Git itself still runs as root (the SSH key lives in root's ~/.ssh),
+          # so mark the workspace as safe for its owner transition.
+          useradd -m builder
+          chown -R builder "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory '*'
+          # Owned by builder (who runs makepkg) instead of root + world-writable 777.
+          runuser -u builder -- mkdir -p /tmp/build /tmp/dest /tmp/src
+          run_makepkg() {
+            runuser -u builder -- env \
+              HOME=/home/builder \
+              BUILDDIR=/tmp/build \
+              PKGDEST=/tmp/dest \
+              SRCDEST=/tmp/src \
+              "$@"
           }
+
+          # --- Resolve per-package targets ---
+          # Each package resolves its own channel target via its .nvchecker.toml
+          # (use_max_release: the GitHub releases API excludes drafts;
+          # include_prereleases gates the pre channel). nvchecker is installed
+          # from the Arch repos; the API token goes through a keyfile.
+          printf '[keys]\ngithub = "%s"\n' "$GH_TOKEN" > /tmp/nvchecker-keyfile.toml
+
+          # Baseline: current versions, captured before any update (feeds the
+          # parent-pointer message body as the "old" side of each row).
+          for sub in aur/*/; do
+            echo "$(sed -n 's/^pkgname=//p' "$sub/PKGBUILD")=$(sed -n 's/^pkgver=//p' "$sub/PKGBUILD")"
+          done > /tmp/aur-old-vers.txt
+
+          # Channel consistency: stable and pre are independent version series,
+          # so each channel is checked separately and a single inconsistent
+          # channel drives the `fix: sync ... in <channel> channel` subject
+          # (both -> plain subject, "all packages" already covers every channel).
+          inconsistent=false
+          in_stable=false; in_pre=false
+          [ "$(awk -F= '$1 !~ /-pre/ {print $2}' /tmp/aur-old-vers.txt | sort -u | wc -l)" -gt 1 ] && in_stable=true
+          [ "$(awk -F= '$1 ~ /-pre/ {print $2}' /tmp/aur-old-vers.txt | sort -u | wc -l)" -gt 1 ] && in_pre=true
+          if $in_stable && $in_pre; then
+            inconsistent=both
+          elif $in_stable; then
+            inconsistent=stable
+          elif $in_pre; then
+            inconsistent=pre
+          fi
+          echo "inconsistent=$inconsistent" >> "$GITHUB_OUTPUT"
+
+          declare -A pkgvers
+          needs_update=false
+          top_tag=""
+          for sub in aur/*/; do
+            pkgname=$(sed -n 's/^pkgname=//p' "$sub/PKGBUILD")
+            pkgver=$(sed -n 's/^pkgver=//p' "$sub/PKGBUILD")
+            target=$(cd "$sub" && nvchecker \
+              --keyfile /tmp/nvchecker-keyfile.toml \
+              -c .nvchecker.toml --logger json --json-log-fd 1 2>/dev/null |
+              jq -r 'select(.event == "updated") | .version' | tail -1)
+            if [ -z "$target" ]; then
+              echo "ERROR: nvchecker found no release target for $pkgname" >&2
+              exit 1
+            fi
+            # nvchecker emits the version in normalized pkgver form
+            # (v1.19.4-pre1 -> 1.19.4pre1). Keep that spelling throughout the
+            # data path; commit subjects only add the v prefix.
+            pkgvers["$pkgname"]="$target"
+            echo "$pkgname: current $pkgver, target $target"
+            if [ "$target" != "$pkgver" ]; then
+              needs_update=true
+              # Upstream publishes serially: at most one version moves per run,
+              # so its pkgver is the run's version (lagging packages move to
+              # the same).
+              top_tag="$target"
+            fi
+          done
+
+          if ! $needs_update && [ "${FORCE:-false}" != "true" ]; then
+            echo "All packages up to date, skipping"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          # Force bumps pkgrel without a version change, so no package reported
+          # a move. Take the leading resolved target. Targets are pkgver-form
+          # (no hyphen), so the Arch comparator vercmp (pacman-contrib, the
+          # same one makepkg/pacman use) applies directly: it ranks a formal
+          # release above its same-numbered pre-releases. (`sort -V` would get
+          # this backwards: v1.19.4-pre3 > v1.19.4.)
+          if [ -z "$top_tag" ]; then
+            leading=""
+            for v in "${pkgvers[@]}"; do
+              if [ -z "$leading" ] || [ "$(vercmp "$v" "$leading")" -gt 0 ]; then
+                leading="$v"
+              fi
+            done
+            top_tag="$leading"
+          fi
+          # The data path keeps one spelling (pkgver); commit subjects add the
+          # v prefix at the display edge.
+          echo "version=$top_tag" >> "$GITHUB_OUTPUT"
+
+          # Rows appended for every package whose gitlink actually moves; the
+          # parent-pointer message body lists these as `pkg: v<old> -> v<new>`.
+          : > /tmp/aur-updated.txt
 
           for sub in aur/*/; do
             cd "$sub"
             pkgname="$(sed -n 's/^pkgname=//p' PKGBUILD)"
+            new_ver="${pkgvers[$pkgname]}"
 
             echo "========================================="
-            echo "Updating: $pkgname to v$new_ver"
+            echo "Updating: $pkgname to v${new_ver}"
             echo "========================================="
-
-            # --- Get SHA256 per arch ---
-            declare -A sha256_map
-            case "$pkgname" in
-              *-compatible-bin)
-                sha=$(gh release view "$TAG" --repo appshubcc/Bettbox \
-                  --json assets \
-                  --jq '[.assets[] | select(.name | endswith("linux-amd64-compatible.deb")) | .digest] | first' | \
-                  sed 's/^sha256://')
-                sha256_map[x86_64]="$sha"
-                echo "deb SHA256 (x86_64): $sha"
-                ;;
-              *-bin)
-                for pair in "linux-amd64.deb|x86_64" "linux-arm64.deb|aarch64"; do
-                  suf="${pair%|*}"; arch_key="${pair#*|}"
-                  sha=$(gh release view "$TAG" --repo appshubcc/Bettbox \
-                    --json assets \
-                    --jq "[.assets[] | select(.name | endswith(\"$suf\")) | .digest] | first" | \
-                    sed 's/^sha256://')
-                  sha256_map[$arch_key]="$sha"
-                  echo "deb SHA256 ($arch_key): $sha"
-                done
-                ;;
-              *)
-                sha=$(curl -fsSL "https://github.com/appshubcc/Bettbox/archive/${TAG}.tar.gz" | sha256sum | cut -d' ' -f1)
-                sha256_map[source]="$sha"
-                echo "source SHA256: $sha"
-                ;;
-            esac
 
             # --- Patch PKGBUILD ---
             if [ "${FORCE:-false}" = "true" ]; then
@@ -172,41 +191,21 @@ jobs:
             sed -i "s/^pkgver=.*/pkgver=${new_ver}/" PKGBUILD
             sed -i "s/^pkgrel=.*/pkgrel=${new_pkgrel}/" PKGBUILD
 
-            case "$pkgname" in
-              *-compatible-bin)
-                base="${pkgname%-compatible-bin}"
-                sed -i "s|^provides=(\"${base}=.*\")|provides=(\"${base}=${new_ver}\")|" PKGBUILD || true
-                sed -i "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('${sha256_map[x86_64]}')/" PKGBUILD
-                ;;
-              *-bin)
-                base="${pkgname%-bin}"
-                sed -i "s|^provides=(\"${base}=.*\")|provides=(\"${base}=${new_ver}\")|" PKGBUILD || true
-                sed -i "s/^sha256sums_x86_64=.*/sha256sums_x86_64=('${sha256_map[x86_64]}')/" PKGBUILD
-                sed -i "s/^sha256sums_aarch64=.*/sha256sums_aarch64=('${sha256_map[aarch64]}')/" PKGBUILD
-                ;;
-              *)
-                set_sha256_source "${sha256_map[source]}"
-                ;;
-            esac
+            # --- Refresh source hashes (canonical, Arch-native) ---
+            # updpkgsums downloads every source from the (post-bump) PKGBUILD
+            # and rewrites sha256sums; it covers tarballs, .deb assets (incl.
+            # the arch-specific sha256sums_x86_64/_aarch64 arrays) and the
+            # local hook/desktop files (unchanged -> idempotent).
+            run_makepkg updpkgsums > /dev/null
 
             echo "=== Updated PKGBUILD ==="
             grep -E '^(pkgver|pkgrel|provides|sha256)' PKGBUILD
 
             # --- Generate .SRCINFO (canonical) ---
-            # makepkg --printsrcinfo is the AUR-endorsed way to emit .SRCINFO. It
-            # handles makepkg-only constructs (top-level `case "$CARCH"`, arrays,
-            # functions) internally, so we no longer `source` the PKGBUILD.
-            # makepkg refuses to run as root, so map the current (runner) user.
-            docker run --rm \
-              --user "$(id -u):$(id -g)" \
-              -e HOME=/tmp \
-              -e BUILDDIR=/tmp/build \
-              -e PKGDEST=/tmp/dest \
-              -e SRCDEST=/tmp/src \
-              -v "$PWD":/work \
-              -w /work \
-              archlinux:latest \
-              sh -c 'mkdir -p /tmp/build /tmp/dest /tmp/src && makepkg --printsrcinfo' > .SRCINFO
+            # The loop already runs inside archlinux:base-devel, so makepkg is
+            # available directly — no docker-in-docker. makepkg refuses to run
+            # as root, so run it as the 'builder' user.
+            run_makepkg makepkg --printsrcinfo > .SRCINFO
             echo "=== Generated .SRCINFO ==="
             cat .SRCINFO
 
@@ -221,6 +220,8 @@ jobs:
               git add PKGBUILD .SRCINFO
               if ! git diff --cached --quiet; then
                 git commit -m "Update to v${new_ver}"
+                old_ver=$(awk -F= -v p="$pkgname" '$1==p {print $2}' /tmp/aur-old-vers.txt)
+                echo "${pkgname}: v${old_ver} -> v${new_ver}" >> /tmp/aur-updated.txt
                 GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes" git push origin HEAD:master
               fi
             fi
@@ -232,26 +233,34 @@ jobs:
         id: pointer
         if: steps.check.outputs.skip == 'false' && !inputs.dry_run
         env:
-          TAG: ${{ steps.check.outputs.tag }}
+          VERSION: ${{ steps.check.outputs.version }}
           FORCE: ${{ inputs.force }}
+          INCONSISTENT: ${{ steps.check.outputs.inconsistent }}
           GIT_NAME: ${{ secrets.GIT_NAME }}
           GIT_EMAIL: ${{ secrets.GIT_EMAIL }}
         run: |
           set -euo pipefail
-          unique_count=$(cut -d= -f2 < /tmp/aur-old-vers.txt | sort -u | wc -l)
-          {
-            if [ "${FORCE:-false}" = "true" ]; then
-              echo "fix: force update source hashes of $TAG"
-            elif [ "$unique_count" -gt 1 ]; then
-              echo "fix: sync all packages to $TAG"
+          # VERSION is the pkgver form (1.19.4pre1). Commit subjects keep that
+          # spelling and just add the v prefix — one version shape in both AUR
+          # and GitHub history (no tag re-expansion).
+          if [ "${FORCE:-false}" = "true" ]; then
+            # Force reuses the currently resolved targets; no version change,
+            # so no update list in the body.
+            {
+              echo "fix: force update source hashes of v${VERSION}"
+            } > /tmp/aur-commit-msg.txt
+          else
+            case "${INCONSISTENT:-false}" in
+              stable|pre) subject="fix: sync all packages to v${VERSION} in $INCONSISTENT channel" ;;
+              both)       subject="fix: sync all packages to v${VERSION}" ;;
+              *)          subject="Update to v${VERSION}" ;;
+            esac
+            {
+              echo "$subject"
               echo ""
-              while IFS='=' read -r pkgname old_ver; do
-                echo "$pkgname was $old_ver, now synced up"
-              done < /tmp/aur-old-vers.txt
-            else
-              echo "Update to $TAG"
-            fi
-          } > /tmp/aur-commit-msg.txt
+              cat /tmp/aur-updated.txt
+            } > /tmp/aur-commit-msg.txt
+          fi
 
           # Manual (workflow_dispatch) runs sign the parent-pointer commit as the
           # owner; scheduled runs leave committer unset so it follows github-actions.
