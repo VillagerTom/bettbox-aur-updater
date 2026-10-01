@@ -2,7 +2,7 @@
 
 [**Bettbox**](https://github.com/appshubcc/Bettbox) 相关 AUR 包的管理仓库，使用 CI 自动维护版本更新。
 
-AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，分 **stable / pre 双通道**，共 6 个包：
+AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，分 **stable / pre 双通道**，共 7 个包：
 
 | AUR 包 | 通道 | 架构 | 类型 | 子模块路径 |
 |--------|------|------|------|-----------|
@@ -12,10 +12,13 @@ AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，分 **stable / pre 
 | [bettbox-pre](https://aur.archlinux.org/packages/bettbox-pre) | pre | x86_64 / aarch64 | 源码构建 | `aur/bettbox-pre/` |
 | [bettbox-compatible-pre](https://aur.archlinux.org/packages/bettbox-compatible-pre) | pre | x86_64 | 源码构建（`GOAMD64=v1`） | `aur/bettbox-compatible-pre/` |
 | [bettbox-compatible-pre-bin](https://aur.archlinux.org/packages/bettbox-compatible-pre-bin) | pre | x86_64 | 预编译二进制 | `aur/bettbox-compatible-pre-bin/` |
+| [bettbox-pre-bin](https://aur.archlinux.org/packages/bettbox-pre-bin) | pre | x86_64 / aarch64 | 预编译二进制 | `aur/bettbox-pre-bin/` |
 
 - 双通道互相独立：stable 跟踪最新正式 release（`v1.19.3`），pre 跟踪最高 `-pre` release（`v1.19.4-pre1`，pkgver 记作 `1.19.4pre1`、无连字符）。
-- **同通道内原子更新**：一个通道内的 3 个包永远同一版本；两通道互不干扰。
-- 6 包安装结构一致（`usr/lib/bettbox`、`usr/bin/bettbox` 软链、`provides=bettbox=$pkgver`），且互相 `conflicts`，同一时间只能安装其一。
+- **同通道内原子更新**：一个通道内的包永远同一版本；两通道互不干扰。stable 通道 3 包，pre 通道 4 包。
+- 7 包安装结构一致（`usr/lib/bettbox`、`usr/bin/bettbox` 软链、`provides=bettbox=$pkgver`），且互相 `conflicts`，同一时间只能安装其一。
+- `compatible` 后缀表示用 `GOAMD64=v1` 构建（仅 x86_64）；`compatible-bin` 同时只提供 x86_64。`bettbox-pre-bin` 上游发布了 amd64 与 arm64 两个 deb，因此支持双架构。
+- `bettbox-bin` 是另一维护者（lyj404）的包，本仓库的 7 个包均与其 `conflicts`。
 
 ## 工作流程
 

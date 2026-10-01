@@ -6,15 +6,19 @@ Manages AUR packages for [Bettbox](https://github.com/appshubcc/Bettbox). The re
 
 ## Structure
 
-The package inventory (six `aur/*/` submodules, stable / pre channels, arch + build type per package) is the table in [README.md](README.md). Agent-relevant rules on top of it:
+The package inventory (seven `aur/*/` submodules, stable / pre channels, arch + build type per package) is the table in [README.md](README.md). Agent-relevant rules on top of it:
 
 - The channel is the `*-pre` pkgname suffix (no suffix = stable).
-- All six packages normalize to one install layout and `provides=bettbox=<ver>` (via `${pkgname%-…}`) and conflict with each other — keep new packages consistent with that.
+- All seven packages normalize to one install layout and `provides=bettbox=<ver>` (via `${pkgname%-…}`) and conflict with each other — keep new packages consistent with that.
 - Each `aur/<pkg>` is a git submodule at `ssh://aur@aur.archlinux.org/<pkgname>.git`; README's 子模块管理 has the clone/add commands.
+
+### Multi-arch `-bin` packages and `${arch}` in per-arch sources
+
+Upstream names its Linux debs by Debian architecture (`amd64`/`arm64`), which never matches the AUR names (`x86_64`/`aarch64`), so a dual-arch `-bin` PKGBUILD spells out **both** the cache name and the URL per architecture. `${arch}` must not be used there: makepkg binds it to the **host** architecture while expanding per-arch arrays, so `source_aarch64` would expand `${arch}` to `x86_64` and collide with `source_x86_64`. See `aur/bettbox-pre-bin/PKGBUILD`.
 
 ## Version model
 
-- Stable channel tracks the latest non-pre release (`v1.19.3`); pre channel tracks the highest `-pre` release (`v1.19.4-pre1`). The channels are **independent series** — a pre bump never touches the stable packages and vice versa.
+- Stable channel tracks the latest non-pre release (`v1.19.3`); pre channel tracks the highest `-pre` release (`v1.19.4-pre1`). The channels are **independent series** — a pre bump never touches the stable packages and vice versa. Pre channel has 4 packages, stable 3 (`bettbox-pre-bin` is pre-only because the stable slot `bettbox-bin` belongs to another maintainer).
 - pkgver never contains a hyphen (makepkg rejects it): pre versions are spelled `1.19.4pre1`. `_pkgver="${pkgver/pre/-pre}"` re-inserts the hyphen for the tarball URL (`archive/v1.19.4-pre1.tar.gz`) and the extracted source dir.
 - Source PKGBUILDs select `APP_ENV` from the version: `local app_env=stable; [[ "${pkgver}" == *pre* ]] && app_env=pre`.
 - Each package carries its own `.nvchecker.toml` (GitHub releases API — drafts and tag-only releases are excluded; junk tags like `v1.19.2-test` never surface):
@@ -36,7 +40,7 @@ Job overview, `force` / `dry_run` inputs and the check → update → parent-poi
 
 - `.SRCINFO` is **always** regenerated via `makepkg --printsrcinfo`, run as the `builder` user inside the container job. Never hand-edit `.SRCINFO`.
 - Checksums are refreshed by `updpkgsums`, which downloads every source (including the `sha256sums_x86_64/_aarch64` arrays) and is idempotent for the local hook/desktop files.
-- Updates are atomic **per channel** (3 packages each): if one package in a channel is behind, the whole channel gets bumped.
+- Updates are atomic **per channel** (3 stable packages, 4 pre packages): if one package in a channel is behind, the whole channel gets bumped.
 - The `force` input bumps `pkgrel` while keeping the version — used to push a checksum/hash refresh without a version change (`fix:` prefix, body lists nothing since no versions moved).
 
 ## CI container quirks
