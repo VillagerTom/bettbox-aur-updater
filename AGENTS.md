@@ -34,7 +34,7 @@ Upstream names its Linux debs by Debian architecture (`amd64`/`arm64`), which ne
 
 Job overview, `force` / `dry_run` inputs and the check → update → parent-pointer flow are in [README.md](README.md). Operational details an agent needs on top:
 
-- **`update-aur.yaml`** — per-package loop resolves the target via that package's `.nvchecker.toml`, skips unless the target changed **or** `force`, then patches pkgver/pkgrel → `updpkgsums` → `makepkg --printsrcinfo` → commit + `git push origin HEAD:master`.
+- **`update-aur.yaml`** — per-package loop resolves the target via that package's `.nvchecker.toml`; packages that clear both short-circuits then patch pkgver/pkgrel → `updpkgsums` → `makepkg --printsrcinfo` → commit + `git push origin HEAD:master`. Gating is two-layered and neither layer replaces the other — see Key behaviors.
   - Parent-pointer subject on a real bump follows per-channel inconsistency: `fix: sync all packages to v<ver> in <stable|pre> channel` / `fix: sync all packages to v<ver>` / `Update to v<ver>`; with `force`: `fix: force update source hashes of v<ver>`. The `in <channel> channel` subject appears when exactly one channel's target moved, which is whenever the two targets differ — i.e. while a `-pre` is newer than the latest formal tag.
   - `dry_run` previews PKGBUILD/.SRCINFO diffs and skips the pointer steps entirely.
 - **`sync-from-aur.yaml`** — manual reverse sync (AUR → parent); parent-pointer commit is `chore: sync AUR submodules to latest`.
@@ -44,7 +44,11 @@ Job overview, `force` / `dry_run` inputs and the check → update → parent-poi
 - `.SRCINFO` is **always** regenerated via `makepkg --printsrcinfo`, run as the `builder` user inside the container job. Never hand-edit `.SRCINFO`.
 - Checksums are refreshed by `updpkgsums`, which downloads every source (including the `sha256sums_x86_64/_aarch64` arrays) and is idempotent for the local hook/desktop files.
 - Updates are atomic **per channel** (3 stable packages, 4 pre packages): if one package in a channel is behind, the whole channel gets bumped. When both channel targets coincide a run advances all seven packages at once; when they differ each channel advances on its own and the pointer-commit subject names the channel that moved.
-- A package whose pkgver already equals its target is skipped whole on a non-force run: no pkgver/pkgrel write, no `updpkgsums`, no `makepkg --printsrcinfo`, no commit. `force` is the only input that touches a package whose version has not moved.
+- Two short-circuits guard every write, at different granularity:
+  - **Job-level** (`needs_update`, Check step) — all-or-nothing. When no package's target differs from its current pkgver and `force` is off, Check sets `skip=true`, which gates off both the Update and Parent-pointer steps. As soon as *one* package's version differs the run proceeds, and the Update loop still visits **all seven** packages.
+  - **Per-package** (Update step) — the only layer with per-package granularity. A package whose pkgver already equals its target is skipped whole on a non-force run: no pkgver/pkgrel write, no `updpkgsums`, no `makepkg --printsrcinfo`, no commit.
+  - The job-level gate cannot cover for the per-package one: it is blind to exactly the mixed case the latter exists for. When one channel moves while the other channel's packages already sit on their own target, the job-level gate passes, and the per-package gate is the only thing keeping the unmoved packages' `pkgrel` from being reset. Removing it as redundant reintroduces exactly that.
+  - `force` bypasses both — each condition tests `!= "true"` — so it is the only input that touches a package whose version has not moved.
 - The `force` input bumps `pkgrel` while keeping the version — used to push a checksum/hash refresh without a version change (`fix:` prefix, body lists nothing since no versions moved).
 
 ## CI container quirks

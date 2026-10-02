@@ -22,6 +22,8 @@ AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，分 **stable / pre 
 
 ## 工作流程
 
+本节只列流程概览与手动输入。版本判定规则、提交信息规范、容器环境限制等操作细节见 [AGENTS.md](AGENTS.md)。
+
 ### [`update-aur.yaml`](.github/workflows/update-aur.yaml)
 
 定时（每天 4:30 / 16:30 UTC）或手动触发。job 运行在 `archlinux:base-devel` 容器内，使用 Arch 原生工具链：
@@ -30,12 +32,12 @@ AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，分 **stable / pre 
 2. **Update** — 遍历 `aur/*/`：更新 pkgver/pkgrel，`updpkgsums` 刷新 checksum，`makepkg --printsrcinfo` 重生成 `.SRCINFO`，push 到 aur.archlinux.org
 3. **Parent pointer** — 更新父仓库的子模块指针
 
+写入 AUR 前有两重短路（作业级 + 逐包级）：版本已等于目标的包会被整包跳过，`pkgrel` 只在版本真正变化时归 1。
+
 手动触发可传两个 input：
 
-- `force`：即使版本已等于通道目标也照样提 `pkgrel`（+1），用于刷新 checksum / 强制重推
+- `force`：绕过两重短路，即使版本已等于通道目标也照样提 `pkgrel`（+1），用于刷新 checksum / 强制重推
 - `dry_run`：只预览 PKGBUILD/.SRCINFO 的 diff，不提交不推送（与 `force` 组合 = 预览 pkgrel+1 的产物）
-
-自动（非 force）运行时，版本已等于目标的包会被**整包跳过**：不改 pkgver/pkgrel、不刷新 checksum、不重生成 `.SRCINFO`、不提交。`pkgrel` 只在版本真正变化时归 1，在 `force` 时 +1。`force` 是唯一能触碰版本未变的包的输入。
 
 ### [`sync-from-aur.yaml`](.github/workflows/sync-from-aur.yaml)
 
