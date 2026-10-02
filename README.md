@@ -14,7 +14,7 @@ AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，分 **stable / pre 
 | [bettbox-compatible-pre-bin](https://aur.archlinux.org/packages/bettbox-compatible-pre-bin) | pre | x86_64 | 预编译二进制 | `aur/bettbox-compatible-pre-bin/` |
 | [bettbox-pre-bin](https://aur.archlinux.org/packages/bettbox-pre-bin) | pre | x86_64 / aarch64 | 预编译二进制 | `aur/bettbox-pre-bin/` |
 
-- 双通道互相独立：stable 跟踪最新正式 release（`v1.19.3`），pre 跟踪最高 `-pre` release（`v1.19.4-pre1`，pkgver 记作 `1.19.4pre1`、无连字符）。
+- **pre 通道是 stable 的超集**：两个通道各自独立解析上游——stable 只认正式 tag，pre 同时认正式 tag 和 `-pre` tag 并取版本号最大者。
 - **同通道内原子更新**：一个通道内的包永远同一版本；两通道互不干扰。stable 通道 3 包，pre 通道 4 包。
 - 7 包安装结构一致（`usr/lib/bettbox`、`usr/bin/bettbox` 软链、`provides=bettbox=$pkgver`），且互相 `conflicts`，同一时间只能安装其一。
 - `compatible` 后缀表示用 `GOAMD64=v1` 构建（仅 x86_64）；`compatible-bin` 同时只提供 x86_64。`bettbox-pre-bin` 上游发布了 amd64 与 arm64 两个 deb，因此支持双架构。
@@ -32,8 +32,10 @@ AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，分 **stable / pre 
 
 手动触发可传两个 input：
 
-- `force`：版本无变化也提 `pkgrel`（+1），用于刷新 checksum / 强制重推
+- `force`：即使版本已等于通道目标也照样提 `pkgrel`（+1），用于刷新 checksum / 强制重推
 - `dry_run`：只预览 PKGBUILD/.SRCINFO 的 diff，不提交不推送（与 `force` 组合 = 预览 pkgrel+1 的产物）
+
+自动（非 force）运行时，版本已等于目标的包会被**整包跳过**：不改 pkgver/pkgrel、不刷新 checksum、不重生成 `.SRCINFO`、不提交。`pkgrel` 只在版本真正变化时归 1，在 `force` 时 +1。`force` 是唯一能触碰版本未变的包的输入。
 
 ### [`sync-from-aur.yaml`](.github/workflows/sync-from-aur.yaml)
 

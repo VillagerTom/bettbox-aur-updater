@@ -18,21 +18,24 @@ Upstream names its Linux debs by Debian architecture (`amd64`/`arm64`), which ne
 
 ## Version model
 
-- Stable channel tracks the latest non-pre release (`v1.19.3`); pre channel tracks the highest `-pre` release (`v1.19.4-pre1`). The channels are **independent series** — a pre bump never touches the stable packages and vice versa. Pre channel has 4 packages, stable 3 (`bettbox-pre-bin` is pre-only because the stable slot `bettbox-bin` belongs to another maintainer).
-- pkgver never contains a hyphen (makepkg rejects it): pre versions are spelled `1.19.4pre1`. `_pkgver="${pkgver/pre/-pre}"` re-inserts the hyphen for the tarball URL (`archive/v1.19.4-pre1.tar.gz`) and the extracted source dir.
-- Source PKGBUILDs select `APP_ENV` from the version: `local app_env=stable; [[ "${pkgver}" == *pre* ]] && app_env=pre`.
-- Each package carries its own `.nvchecker.toml` (GitHub releases API — drafts and tag-only releases are excluded; junk tags like `v1.19.2-test` never surface):
-  - stable: `use_max_release = true` + `include_regex = '^v\d+\.\d+\.\d+$'` + `prefix = 'v'` → target `1.19.3`
-  - pre: `use_max_release = true` + `include_prereleases = true` + `include_regex = '^v\d+\.\d+\.\d+-pre\d+$'` + `from_pattern`/`to_pattern` (`\1pre\2`) → target `1.19.4pre1` (no `prefix`)
-  - The GitHub token goes through a keyfile in CI (`[keys] github = ...`).
-- The pre-bin `.deb` asset is cached under `bettbox-compatible-<ver>-x86_64.deb` (URL built from `_pkgver`, keeps the `compatible` name); the pre source tarball downloads from `archive/v1.19.4-pre1.tar.gz`.
+- **The pre channel is a superset of stable.** The pre channel's meaning is "install the newest release upstream has":
+  - stable accepts formal tags only; its target is the highest formal release;
+  - pre accepts formal *and* `-pre` tags; its target is whichever of the two versions higher;
+  - the two channel targets are equal exactly when no `-pre` is newer than the latest formal tag. Upstream ships a `-pre` series ahead of every formal tag, so pre sits ahead through most of a release cycle and the two coincide only in the window after a formal release. Either way each channel resolves its target on its own.
+- nvchecker does the ordering per PEP440: `-pre1` normalizes to `rc1`, so `v1.19.4` > `v1.19.4-pre1` and `use_max_release = true` picks the formal tag on its own.
+- The pre channel has 4 packages, stable 3 (`bettbox-pre-bin` is pre-only because the stable slot `bettbox-bin` belongs to another maintainer).
+- pkgver never contains a hyphen (makepkg rejects it): pre versions are spelled `1.19.4pre1`. `_pkgver="${pkgver/pre/-pre}"` re-inserts the hyphen for the tarball URL (`archive/v1.19.4-pre1.tar.gz`) and the extracted source dir. It is a no-op at a formal pkgver and still required while a `-pre` is ahead — do not remove it.
+- Source PKGBUILDs select `APP_ENV` from the version: `local app_env=stable; [[ "${pkgver}" == *pre* ]] && app_env=pre`. **This line needs no per-channel adjustment**: upstream's own rule is "no `-` in the ref means a stable build", so pre picking up a formal tag installs that tag's `APP_ENV=stable` artifact. pkgver tracks exactly what gets installed.
+- Each package carries its own `.nvchecker.toml` (GitHub releases API — drafts and tag-only releases are excluded; junk tags like `v1.19.2-test` never surface). The GitHub token goes through a keyfile in CI (`[keys] github = ...`), **not** the `GITHUB_TOKEN` env var (that returns 403).
+- **`.nvchecker.toml` must be pushed together with PKGBUILD.** Pushing only the PKGBUILD leaves the pre-only regex on AUR, so the next `update-aur` re-resolves `1.19.4pre1` and reverts the `1.19.4` you just published.
+- The pre-bin `.deb` asset is cached under `bettbox-compatible-<ver>-x86_64.deb` (URL built from `_pkgver`, keeps the `compatible` name); source tarballs come from `archive/v${_pkgver}.tar.gz`, i.e. `archive/v1.19.4.tar.gz` at a formal version.
 
 ## CI workflows
 
 Job overview, `force` / `dry_run` inputs and the check → update → parent-pointer flow are in [README.md](README.md). Operational details an agent needs on top:
 
 - **`update-aur.yaml`** — per-package loop resolves the target via that package's `.nvchecker.toml`, skips unless the target changed **or** `force`, then patches pkgver/pkgrel → `updpkgsums` → `makepkg --printsrcinfo` → commit + `git push origin HEAD:master`.
-  - Parent-pointer subject on a real bump follows per-channel inconsistency: `fix: sync all packages to v<ver> in <stable|pre> channel` / `fix: sync all packages to v<ver>` / `Update to v<ver>`; with `force`: `fix: force update source hashes of v<ver>`.
+  - Parent-pointer subject on a real bump follows per-channel inconsistency: `fix: sync all packages to v<ver> in <stable|pre> channel` / `fix: sync all packages to v<ver>` / `Update to v<ver>`; with `force`: `fix: force update source hashes of v<ver>`. The `in <channel> channel` subject appears when exactly one channel's target moved, which is whenever the two targets differ — i.e. while a `-pre` is newer than the latest formal tag.
   - `dry_run` previews PKGBUILD/.SRCINFO diffs and skips the pointer steps entirely.
 - **`sync-from-aur.yaml`** — manual reverse sync (AUR → parent); parent-pointer commit is `chore: sync AUR submodules to latest`.
 
@@ -40,7 +43,8 @@ Job overview, `force` / `dry_run` inputs and the check → update → parent-poi
 
 - `.SRCINFO` is **always** regenerated via `makepkg --printsrcinfo`, run as the `builder` user inside the container job. Never hand-edit `.SRCINFO`.
 - Checksums are refreshed by `updpkgsums`, which downloads every source (including the `sha256sums_x86_64/_aarch64` arrays) and is idempotent for the local hook/desktop files.
-- Updates are atomic **per channel** (3 stable packages, 4 pre packages): if one package in a channel is behind, the whole channel gets bumped.
+- Updates are atomic **per channel** (3 stable packages, 4 pre packages): if one package in a channel is behind, the whole channel gets bumped. When both channel targets coincide a run advances all seven packages at once; when they differ each channel advances on its own and the pointer-commit subject names the channel that moved.
+- A package whose pkgver already equals its target is skipped whole on a non-force run: no pkgver/pkgrel write, no `updpkgsums`, no `makepkg --printsrcinfo`, no commit. `force` is the only input that touches a package whose version has not moved.
 - The `force` input bumps `pkgrel` while keeping the version — used to push a checksum/hash refresh without a version change (`fix:` prefix, body lists nothing since no versions moved).
 
 ## CI container quirks
@@ -108,7 +112,7 @@ Routine version bumps go through CI; any manual change follows **one uniform flo
 - Work in a clean `aur/<pkg>` worktree (or a separate AUR clone). Submodules sit in detached HEAD — that's fine for edits: commit and push while detached (`git push origin HEAD:master`), no branch switch needed; if not checked out, `git submodule update --init aur/<pkg>`. Mechanics in "Submodules run detached HEAD".
 - Tools (Arch host or container, run as **non-root** user): `makepkg` (pacman) and `updpkgsums` (pacman-contrib) — makepkg refuses to run as root; `bash -n` needs only bash. CI does the same work as the throwaway `builder` user inside the container.
 - Publishing needs the AUR SSH key + keyscanned known_hosts in `$HOME/.ssh` (`aur`, `known_hosts`) — the material CI provisions in Job container; locally it must live in your own `$HOME/.ssh`.
-- Keep the channel consistent: pkgver spelling and `APP_ENV` follow the package's `*-pre` suffix — see [Version model](#version-model).
+- Keep the channel consistent: a `*-pre` package's pkgver must equal what its own `.nvchecker.toml` resolves to, spelled `1.19.4` for a formal tag and `1.19.4pre1` for a `-pre` one. The spelling follows the resolved target, and `APP_ENV` follows the pkgver — see [Version model](#version-model).
 
 **Edit + push to AUR:**
 
