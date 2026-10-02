@@ -175,6 +175,15 @@ jobs:
             cd "$sub"
             pkgname="$(sed -n 's/^pkgname=//p' PKGBUILD)"
             new_ver="${pkgvers[$pkgname]}"
+            current_pkgver=$(sed -n 's/^pkgver=//p' PKGBUILD)
+
+            if [ "$new_ver" = "$current_pkgver" ] && [ "${FORCE:-false}" != "true" ]; then
+              echo "========================================="
+              echo "Skipping: $pkgname already at v${new_ver}"
+              echo "========================================="
+              cd ../..
+              continue
+            fi
 
             echo "========================================="
             echo "Updating: $pkgname to v${new_ver}"
