@@ -37,10 +37,14 @@ jobs:
         # nodejs is required by JavaScript Actions (actions/checkout) in an
         # Actions container job. nvchecker and pacman-contrib (updpkgsums)
         # come from the Arch repos.
+        # A full system upgrade in the same transaction is mandatory: the
+        # rolling repos move ahead of the base image, and installing packages
+        # on a stale base is a partial upgrade that aborts as soon as a new
+        # soname appears (openssl 4.1.0 breaking libcrypto.so=3-64 required by
+        # curl/pacman/sudo).
         run: |
           set -euo pipefail
-          pacman -Sy --noconfirm > /dev/null
-          pacman -S --noconfirm --needed \
+          pacman -Syu --noconfirm --needed \
             git openssh jq nvchecker pacman-contrib nodejs > /dev/null
 
       - name: Checkout
