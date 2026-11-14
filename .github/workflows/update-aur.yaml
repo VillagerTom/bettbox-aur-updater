@@ -1,5 +1,5 @@
 name: Update AUR packages
-run-name: Update AUR packages${{ inputs.dry_run && ' (dry-run)' || '' }}
+run-name: Update AUR packages${{ (inputs.dry_run || github.event.client_payload.dry_run) && ' (dry-run)' || '' }}
 
 on:
   schedule:
@@ -16,6 +16,8 @@ on:
         required: false
         type: boolean
         default: false
+  repository_dispatch:
+    types: [bettbox-release]
 
 permissions: {}
 
@@ -30,6 +32,11 @@ jobs:
       image: archlinux:base-devel
     permissions:
       contents: write
+    env:
+      # inputs (workflow_dispatch) and client_payload (repository_dispatch) are
+      # mutually exclusive; '|| false' normalizes the schedule's null to a string.
+      FORCE: ${{ inputs.force || github.event.client_payload.force || 'false' }}
+      DRY_RUN: ${{ inputs.dry_run || github.event.client_payload.dry_run || 'false' }}
     steps:
       - name: Install Arch toolchain
         # The job runs inside an Arch container so the update loop uses the
@@ -61,8 +68,6 @@ jobs:
         id: check
         env:
           GH_TOKEN: ${{ github.token }}
-          FORCE: ${{ inputs.force }}
-          DRY_RUN: ${{ inputs.dry_run }}
           GIT_NAME: ${{ secrets.GIT_NAME }}
           GIT_EMAIL: ${{ secrets.GIT_EMAIL }}
         run: |
@@ -244,10 +249,9 @@ jobs:
 
       - name: Build parent pointer commit message
         id: pointer
-        if: steps.check.outputs.skip == 'false' && !inputs.dry_run
+        if: steps.check.outputs.skip == 'false' && env.DRY_RUN != 'true'
         env:
           VERSION: ${{ steps.check.outputs.version }}
-          FORCE: ${{ inputs.force }}
           INCONSISTENT: ${{ steps.check.outputs.inconsistent }}
           GIT_NAME: ${{ secrets.GIT_NAME }}
           GIT_EMAIL: ${{ secrets.GIT_EMAIL }}
@@ -283,7 +287,7 @@ jobs:
           fi
 
       - name: Update parent submodule pointers
-        if: steps.check.outputs.skip == 'false' && !inputs.dry_run
+        if: steps.check.outputs.skip == 'false' && env.DRY_RUN != 'true'
         uses: ./.github/actions/commit-submodule-pointers
         with:
           message-file: /tmp/aur-commit-msg.txt

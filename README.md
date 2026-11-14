@@ -26,7 +26,7 @@ AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，分 **stable / pre 
 
 ### [`update-aur.yaml`](.github/workflows/update-aur.yaml)
 
-定时（每天 4:30 / 16:30 UTC）或手动触发。job 运行在 `archlinux:base-devel` 容器内，使用 Arch 原生工具链：
+定时（每天 4:30 / 16:30 UTC）、手动触发，或由 [Bettbox](https://github.com/appshubcc/Bettbox) 发版流程以 `repository_dispatch`（事件类型 `bettbox-release`）触发。job 运行在 `archlinux:base-devel` 容器内，使用 Arch 原生工具链：
 
 1. **Check** — 每包按自己的 `.nvchecker.toml`（GitHub releases API）解析通道目标版本
 2. **Update** — 遍历 `aur/*/`：更新 pkgver/pkgrel，`updpkgsums` 刷新 checksum，`makepkg --printsrcinfo` 重生成 `.SRCINFO`，push 到 aur.archlinux.org
@@ -38,6 +38,8 @@ AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，分 **stable / pre 
 
 - `force`：绕过两重短路，即使版本已等于通道目标也照样提 `pkgrel`（+1），用于刷新 checksum / 强制重推
 - `dry_run`：只预览 PKGBUILD/.SRCINFO 的 diff，不提交不推送（与 `force` 组合 = 预览 pkgrel+1 的产物）
+
+`repository_dispatch` 没有 input，两个开关改从 `client_payload` 读（布尔），语义同上。
 
 ### [`sync-from-aur.yaml`](.github/workflows/sync-from-aur.yaml)
 
