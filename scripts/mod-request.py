@@ -163,6 +163,17 @@ DIM_DEFAULTS = {"type": "source", "variant": "common", "edition": "standard"}
 PAYLOAD_PREFIX = "payload: "
 
 
+def package_order(pkg: str) -> tuple[int, str]:
+    """Canonical order for every package listing: standard block, then lite.
+
+    The edition groups the form and any rendered body, so the two families stay
+    readable apart; names that do not fit the grammar sort with the standard
+    block rather than dying here, leaving that verdict to `package_dims`.
+    """
+    m = PKG_NAME.match(pkg)
+    return (1 if m and m.group("edition") == "lite" else 0, pkg)
+
+
 def payload_label(pkg: str) -> str:
     return PAYLOAD_PREFIX + pkg
 
@@ -248,7 +259,7 @@ def discover_packages(root: Path) -> list[str]:
             names.append(m.group(1).strip())
     if not names:
         die(f"no packages found under {root / 'aur'}")
-    return sorted(names)
+    return sorted(names, key=package_order)
 
 
 def package_dims(pkg: str) -> dict[str, str]:
@@ -271,8 +282,9 @@ def resolve_pkgs(selection: dict, packages: list[str]) -> list[str]:
     if not all(chosen.values()):
         return []
     return sorted(
-        pkg for pkg in packages
-        if all(package_dims(pkg)[dim] in chosen[dim] for dim in DIMENSIONS)
+        (pkg for pkg in packages
+         if all(package_dims(pkg)[dim] in chosen[dim] for dim in DIMENSIONS)),
+        key=package_order,
     )
 
 
@@ -729,7 +741,7 @@ def render(data: dict, packages: list[str]) -> str:
         out.append("")
 
     if data.get("diff_state") == "ready":
-        for pkg in sorted(data.get("payload") or {}):
+        for pkg in sorted(data.get("payload") or {}, key=package_order):
             ent = data["payload"][pkg]
             out.append(f"### {payload_label(pkg)}")
             out.append("")
