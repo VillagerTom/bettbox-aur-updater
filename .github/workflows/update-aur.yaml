@@ -386,6 +386,14 @@ jobs:
             # and rewrites sha256sums; it covers tarballs, .deb assets (incl.
             # the arch-specific sha256sums_x86_64/_aarch64 arrays) and the
             # local hook/desktop files (unchanged -> idempotent).
+            #
+            # The patches above run as root, and sed -i renames its temp file
+            # over PKGBUILD, leaving it owned by root.  updpkgsums (builder)
+            # rewrites the file in place -- current pacman-contrib uses
+            # `cat > $buildfile`, which needs write permission on the file
+            # itself -- so hand ownership back first.  Run 44243778050 died
+            # exactly there ("updpkgsums: PKGBUILD: Permission denied").
+            chown builder:builder PKGBUILD
             run_makepkg updpkgsums > /dev/null
 
             echo "=== Updated PKGBUILD ==="
