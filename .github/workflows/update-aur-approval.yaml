@@ -97,6 +97,12 @@ jobs:
     permissions:
       contents: read
       issues: read
+    # Job outputs are not forwarded from steps automatically; without this
+    # mapping `needs.triage.outputs.apply` is empty and the pipeline is
+    # skipped even when triage decided it must run.
+    outputs:
+      apply: ${{ steps.verdict.outputs.apply }}
+      reason: ${{ steps.verdict.outputs.reason }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
