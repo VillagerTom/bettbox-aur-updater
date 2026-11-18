@@ -1,5 +1,5 @@
 name: Update AUR packages
-run-name: Update AUR packages${{ (inputs.dry_run || github.event.client_payload.dry_run) && ' (dry-run)' || '' }}
+run-name: "Update AUR packages${{ (inputs.dry_run || github.event.client_payload.dry_run) && ' (dry-run)' || '' }}"
 
 on:
   schedule:
@@ -18,32 +18,74 @@ on:
         default: false
   repository_dispatch:
     types: [bettbox-release]
+  # The issue trigger is not here: an approval runs this same pipeline through
+  # update-aur-approval.yaml, which is the only entry point for comments (and
+  # prunes its own runs, which this one must not -- its history is the schedule).
+  workflow_call:
+    inputs:
+      force:
+        description: Force update even if version is the same
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: Preview PKGBUILD/.SRCINFO diffs without committing or pushing
+        required: false
+        type: boolean
+        default: false
+      approval:
+        description: An approval -- resolve against the published versions (nothing moves)
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      AUR_SSH_PRIVATE_KEY:
+        required: true
+      GIT_NAME:
+        required: false
+      GIT_EMAIL:
+        required: false
 
 permissions: {}
 
-concurrency:
-  group: update-aur
-  cancel-in-progress: false
-
+# The group lives on the job, not on the workflow: update-aur-approval.yaml
+# calls this file, and job-level concurrency is what a called workflow is
+# documented to share with its caller.  One key therefore serializes every run
+# -- scheduled, dispatched and approved -- and no file declares a second one
+# (the same group on both sides is a run waiting for itself).
 jobs:
   update-aur-packages:
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
+    concurrency:
+      group: update-aur
+      cancel-in-progress: false
     permissions:
       contents: write
+      # Mod requests live in issues: CI writes the signed applied record
+      # there and closes a request once every package it covers is applied.
+      issues: write
     env:
+      # nvchecker reads releases with this token; the request script reads
+      # and records the issues through gh.
+      GH_TOKEN: ${{ github.token }}
       # inputs (workflow_dispatch) and client_payload (repository_dispatch) are
       # mutually exclusive; '|| false' normalizes the schedule's null to a string.
       FORCE: ${{ inputs.force || github.event.client_payload.force || 'false' }}
       DRY_RUN: ${{ inputs.dry_run || github.event.client_payload.dry_run || 'false' }}
+      # Passed by the approval caller explicitly: the event name inside a called
+      # workflow is the call itself, so the payload cannot say "this is an
+      # approval".  Empty on every other trigger, which reads as 'false'.
+      APPROVAL: ${{ inputs.approval || 'false' }}
     steps:
       - name: Install Arch toolchain
         # The job runs inside an Arch container so the update loop uses the
         # same makepkg/sed/awk the package will be built with (lilac-style).
         # nodejs is required by JavaScript Actions (actions/checkout) in an
-        # Actions container job. nvchecker and pacman-contrib (updpkgsums)
-        # come from the Arch repos.
+        # Actions container job. nvchecker resolves the channel targets,
+        # pacman-contrib carries updpkgsums and vercmp; python runs the
+        # mod-request scripts; github-cli reads and records the issues.
         # A full system upgrade in the same transaction is mandatory: the
         # rolling repos move ahead of the base image, and installing packages
         # on a stale base is a partial upgrade that aborts as soon as a new
@@ -52,7 +94,7 @@ jobs:
         run: |
           set -euo pipefail
           pacman -Syu --noconfirm --needed \
-            git openssh jq nvchecker pacman-contrib nodejs > /dev/null
+            git openssh jq nvchecker pacman-contrib nodejs python github-cli > /dev/null
 
       - name: Checkout
         uses: actions/checkout@v6
@@ -64,10 +106,29 @@ jobs:
         with:
           ssh-key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
 
+      - name: Verify the signing key matches the committed public key
+        # Applied records are signed with the AUR key setup-submodules just wrote
+        # and verified against the public half committed at
+        # bettbox-aur-updater.pub.  Check the pair here, before anything is
+        # pushed: `token` refuses to sign with a key the repository does not
+        # carry, and by then the commits are already on AUR -- a push with no
+        # record, which silently breaks the replace-the-issue path later on.
+        run: |
+          set -euo pipefail
+          if ! derived=$(ssh-keygen -y -f "$HOME/.ssh/aur" | awk '{print $1" "$2}'); then
+            echo "::error::cannot read the AUR_SSH_PRIVATE_KEY secret (missing, encrypted, or not an SSH key)"
+            exit 1
+          fi
+          committed=$(awk 'NF && $1 !~ /^#/ {print $1" "$2; exit}' bettbox-aur-updater.pub)
+          if [ "$derived" != "$committed" ]; then
+            echo "::error file=bettbox-aur-updater.pub::the AUR_SSH_PRIVATE_KEY secret does not match the public key committed here; applied records signed in this run would not verify"
+            exit 1
+          fi
+          echo "signing key matches bettbox-aur-updater.pub"
+
       - name: Check and update AUR packages
         id: check
         env:
-          GH_TOKEN: ${{ github.token }}
           GIT_NAME: ${{ secrets.GIT_NAME }}
           GIT_EMAIL: ${{ secrets.GIT_EMAIL }}
         run: |
@@ -93,38 +154,13 @@ jobs:
           }
 
           # --- Resolve per-package targets ---
-          # Each package resolves its own channel target via its .nvchecker.toml
-          # (use_max_release: the GitHub releases API excludes drafts;
-          # include_prereleases gates the pre channel). nvchecker is installed
-          # from the Arch repos; the API token goes through a keyfile.
+          # Each package resolves its own channel target from .nvchecker.toml
+          # (use_max_release: the releases API excludes drafts; include_prereleases
+          # gates the pre channel).  An approval resolves against the published
+          # versions, so a ready request lands as a packaging change right away.
           printf '[keys]\ngithub = "%s"\n' "$GH_TOKEN" > /tmp/nvchecker-keyfile.toml
 
-          # Baseline: current versions, captured before any update (feeds the
-          # parent-pointer message body as the "old" side of each row).
-          for sub in aur/*/; do
-            echo "$(sed -n 's/^pkgname=//p' "$sub/PKGBUILD")=$(sed -n 's/^pkgver=//p' "$sub/PKGBUILD")"
-          done > /tmp/aur-old-vers.txt
-
-          # Channel consistency: stable and pre are independent version series,
-          # so each channel is checked separately and a single inconsistent
-          # channel drives the `fix: sync ... in <channel> channel` subject
-          # (both -> plain subject, "all packages" already covers every channel).
-          inconsistent=false
-          in_stable=false; in_pre=false
-          [ "$(awk -F= '$1 !~ /-pre/ {print $2}' /tmp/aur-old-vers.txt | sort -u | wc -l)" -gt 1 ] && in_stable=true
-          [ "$(awk -F= '$1 ~ /-pre/ {print $2}' /tmp/aur-old-vers.txt | sort -u | wc -l)" -gt 1 ] && in_pre=true
-          if $in_stable && $in_pre; then
-            inconsistent=both
-          elif $in_stable; then
-            inconsistent=stable
-          elif $in_pre; then
-            inconsistent=pre
-          fi
-          echo "inconsistent=$inconsistent" >> "$GITHUB_OUTPUT"
-
-          declare -A pkgvers
-          needs_update=false
-          top_tag=""
+          : > /tmp/aur-targets.txt
           for sub in aur/*/; do
             pkgname=$(sed -n 's/^pkgname=//p' "$sub/PKGBUILD")
             pkgver=$(sed -n 's/^pkgver=//p' "$sub/PKGBUILD")
@@ -139,54 +175,167 @@ jobs:
             # nvchecker emits the version in normalized pkgver form
             # (v1.19.4-pre1 -> 1.19.4pre1). Keep that spelling throughout the
             # data path; commit subjects only add the v prefix.
-            pkgvers["$pkgname"]="$target"
+            printf '%s %s %s\n' "$pkgname" "$pkgver" "$target" >> /tmp/aur-targets.txt
             echo "$pkgname: current $pkgver, target $target"
-            if [ "$target" != "$pkgver" ]; then
-              needs_update=true
-              # Upstream publishes serially: at most one version moves per run,
-              # so its pkgver is the run's version (lagging packages move to
-              # the same).
-              top_tag="$target"
-            fi
           done
 
-          if ! $needs_update && [ "${FORCE:-false}" != "true" ]; then
-            echo "All packages up to date, skipping"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            exit 0
+          # An approval asserts nothing about a release: fold every target onto
+          # what the package publishes right now, so the only change that can
+          # land is packaging content (a pkgrel patch).
+          if [ "${APPROVAL:-false}" = "true" ]; then
+            awk '{print $1, $2, $2}' /tmp/aur-targets.txt > /tmp/aur-targets.appr
+            mv /tmp/aur-targets.appr /tmp/aur-targets.txt
+            echo "approval event: resolving against the published versions"
           fi
 
-          echo "skip=false" >> "$GITHUB_OUTPUT"
-          # Force bumps pkgrel without a version change, so no package reported
-          # a move. Take the leading resolved target. Targets are pkgver-form
-          # (no hyphen), so the Arch comparator vercmp (pacman-contrib, the
-          # same one makepkg/pacman use) applies directly: it ranks a formal
-          # release above its same-numbered pre-releases. (`sort -V` would get
-          # this backwards: v1.19.4-pre3 > v1.19.4.)
-          if [ -z "$top_tag" ]; then
-            leading=""
-            for v in "${pkgvers[@]}"; do
-              if [ -z "$leading" ] || [ "$(vercmp "$v" "$leading")" -gt 0 ]; then
-                leading="$v"
-              fi
-            done
-            top_tag="$leading"
+          # Baseline: current versions, captured before any update (feeds the
+          # parent-pointer message body as the "old" side of each row) and used
+          # for channel consistency.
+          for sub in aur/*/; do
+            echo "$(sed -n 's/^pkgname=//p' "$sub/PKGBUILD")=$(sed -n 's/^pkgver=//p' "$sub/PKGBUILD")"
+          done > /tmp/aur-old-vers.txt
+
+          # Channel consistency: stable and pre are independent version series,
+          # so each channel is checked separately and a single inconsistent
+          # channel drives the `fix: sync ... in <channel> channel` subject
+          # (both -> plain subject, "all packages" already covers every channel).
+          inconsistent=false
+          in_stable=false
+          in_pre=false
+          [ "$(awk -F= '$1 !~ /-pre/ {print $2}' /tmp/aur-old-vers.txt | sort -u | wc -l)" -gt 1 ] &&
+            in_stable=true
+          [ "$(awk -F= '$1 ~ /-pre/ {print $2}' /tmp/aur-old-vers.txt | sort -u | wc -l)" -gt 1 ] &&
+            in_pre=true
+          if $in_stable && $in_pre; then
+            inconsistent=both
+          elif $in_stable; then
+            inconsistent=stable
+          elif $in_pre; then
+            inconsistent=pre
           fi
-          # The data path keeps one spelling (pkgver); commit subjects add the
-          # v prefix at the display edge.
+          echo "inconsistent=$inconsistent" >> "$GITHUB_OUTPUT"
+
+          # The run's version: the highest target.  Targets are pkgver-form (no
+          # hyphen), so the Arch comparator vercmp (the same one makepkg/pacman
+          # use) applies directly: it ranks a formal release above its
+          # same-numbered pre-releases.  (`sort -V` would get this backwards:
+          # v1.19.4-pre3 > v1.19.4.)
+          top_tag=""
+          while read -r _pkg _current target; do
+            if [ -z "$top_tag" ] || [ "$(vercmp "$target" "$top_tag")" -gt 0 ]; then
+              top_tag="$target"
+            fi
+          done < /tmp/aur-targets.txt
           echo "version=$top_tag" >> "$GITHUB_OUTPUT"
 
-          # Rows appended for every package whose gitlink actually moves; the
+          # Versions come from the targets resolved above; what a live request
+          # does to a package comes from the script's own decision, read below.
+          force=${FORCE:-false}
+          dry_run=${DRY_RUN:-false}
+          worked=false
+
+          # Rows appended for every package whose version actually moves; the
           # parent-pointer message body lists these as `pkg: v<old> -> v<new>`.
           : > /tmp/aur-updated.txt
+          # Request applications, in both shapes: the readable row for the parent
+          # message, and a machine row (issue, version, package) that decides the
+          # subject.  A request-only run moves no version, so it needs a subject
+          # of its own.
+          : > /tmp/aur-mr-rows.txt
+          : > /tmp/aur-mod-requests.txt
 
-          for sub in aur/*/; do
-            cd "$sub"
-            pkgname="$(sed -n 's/^pkgname=//p' PKGBUILD)"
-            new_ver="${pkgvers[$pkgname]}"
-            current_pkgver=$(sed -n 's/^pkgver=//p' PKGBUILD)
+          # --- Let the script decide and apply ------------------------------
+          # One call does the whole judgement: it lists the live requests (open,
+          # approved, pinned to the body as it is now), runs the gate on each,
+          # and applies the payload wherever the version rule lets it -- before
+          # any pkgver is written below, so a hunk never has to match a line the
+          # loop is about to change.  Its checks are the ones a local run does,
+          # and it validates every covered package before touching any of them.
+          #
+          # pkgrel is CI's in all three cases (--no-pkgrel): a version move
+          # resets it to 1, a force run and a request-only run bump it.
+          scratch=$(mktemp -d /tmp/mr-run.XXXXXX)
+          trap 'rm -rf "$scratch"' EXIT
+          report="$scratch/report.txt"
+          if ! "$GITHUB_WORKSPACE/scripts/apply-mod-request.sh" \
+            --versions /tmp/aur-targets.txt --repo "$GITHUB_REPOSITORY" \
+            --no-pkgrel > "$report" 2>&1; then
+            cat "$report" >&2
+            exit 1
+          fi
+          cat "$report"
 
-            if [ "$new_ver" = "$current_pkgver" ] && [ "${FORCE:-false}" != "true" ]; then
+          # #mr-body / #mr-held / #mr-applied, one per line.
+          declare -A mr_issue_of=() mr_held_of=() mr_hash_of=()
+          while IFS= read -r line; do
+            case "$line" in
+              '#mr-body '*)
+                read -r _ num hash <<< "${line#\#}"
+                mr_hash_of["$num"]=$hash
+                ;;
+              '#mr-held '*)
+                read -r _ pkg num <<< "${line#\#}"
+                mr_held_of["$pkg"]=$num
+                ;;
+              '#mr-applied '*)
+                read -r _ pkg num <<< "${line#\#}"
+                mr_issue_of["$pkg"]=$num
+                ;;
+            esac
+          done < "$report"
+
+          # The commit message and the signed record both come from the body, so
+          # re-read it -- and refuse if it is no longer the body the script
+          # gated and wrote: a request edited mid-run describes something else.
+          declare -A mr_body_of=() mr_base_of=()
+          for num in "${!mr_hash_of[@]}"; do
+            mr_body="$scratch/body-$num.md"
+            gh issue view "$num" -R "$GITHUB_REPOSITORY" \
+              --json body -q '.body // ""' > "$mr_body" || {
+              echo "ERROR: cannot re-read mod request #$num" >&2
+              exit 1
+            }
+            body_hash=$(python3 "$GITHUB_WORKSPACE/scripts/mod-request.py" \
+              --root "$GITHUB_WORKSPACE" hash -f "$mr_body") || {
+              echo "ERROR: mod request #$num no longer parses as a request" >&2
+              exit 1
+            }
+            if [ "$body_hash" != "${mr_hash_of[$num]}" ]; then
+              echo "ERROR: mod request #$num was edited while this run applied it" >&2
+              echo "  gated ${mr_hash_of[$num]:0:12}..., now ${body_hash:0:12}...: nothing committed" >&2
+              exit 1
+            fi
+            mr_body_of["$num"]=$mr_body
+            # The request's base version, not what a channel published: it names
+            # the family in the parent commit subject.
+            mr_base_of["$num"]=$(python3 "$GITHUB_WORKSPACE/scripts/mod-request.py" \
+              --root "$GITHUB_WORKSPACE" target -f "$mr_body")
+          done
+
+          # One row per package, in aur/*/ order.  The versions come from the
+          # targets resolved above; the script's decisions say what a request
+          # adds to a package, if anything.
+          while read -r pkgname current_pkgver new_ver; do
+            cd "aur/$pkgname"
+            mr_issue=${mr_issue_of[$pkgname]:-}
+            mr_held=${mr_held_of[$pkgname]:-}
+
+            # A request that is still pending holds the package: shipping the
+            # version without the change it stands for is what it exists to
+            # prevent.  Force does not override it -- `force` refreshes a hash,
+            # it does not decide that an unadapted version may go out.
+            if [ -n "$mr_held" ]; then
+              echo "========================================="
+              echo "Holding: $pkgname until mod request #$mr_held is ready"
+              echo "========================================="
+              cd ../..
+              continue
+            fi
+
+            # A version move, or a request patching the version already
+            # published, is work; anything else is skipped whole.
+            if [ "$new_ver" = "$current_pkgver" ] && [ "$force" != "true" ] &&
+              [ -z "$mr_issue" ]; then
               echo "========================================="
               echo "Skipping: $pkgname already at v${new_ver}"
               echo "========================================="
@@ -194,20 +343,43 @@ jobs:
               continue
             fi
 
+            label=""
+            if [ -n "$mr_issue" ]; then
+              label=" + mod request #${mr_issue}"
+            fi
             echo "========================================="
-            echo "Updating: $pkgname to v${new_ver}"
+            echo "Updating: $pkgname to v${new_ver}${label}"
             echo "========================================="
 
             # --- Patch PKGBUILD ---
-            if [ "${FORCE:-false}" = "true" ]; then
+            # A request's diff landed before this loop, while the package was
+            # still the tree it was written against, so no hunk has to match a
+            # pkgver line written here.
+
+            if [ "$force" = "true" ]; then
               current_pkgrel=$(sed -n 's/^pkgrel=//p' PKGBUILD)
               new_pkgrel=$((current_pkgrel + 1))
               echo "Force mode: bumping pkgrel $current_pkgrel → $new_pkgrel"
-            else
-              new_pkgrel=1
+              sed -i "s/^pkgver=.*/pkgver=${new_ver}/" PKGBUILD
+              sed -i "s/^pkgrel=.*/pkgrel=${new_pkgrel}/" PKGBUILD
+            elif [ "$new_ver" != "$current_pkgver" ]; then
+              # A new version starts at pkgrel=1.
+              sed -i "s/^pkgver=.*/pkgver=${new_ver}/" PKGBUILD
+              sed -i "s/^pkgrel=.*/pkgrel=1/" PKGBUILD
+            elif [ -n "$mr_issue" ]; then
+              # A request patching the version already published: no version
+              # moves, so the rebuild is the change and pkgrel carries it.
+              current_pkgrel=$(sed -n 's/^pkgrel=//p' PKGBUILD)
+              case "$current_pkgrel" in
+                '' | *[!0-9]*)
+                  echo "ERROR: $pkgname: cannot bump pkgrel (PKGBUILD says '${current_pkgrel}')" >&2
+                  exit 1
+                  ;;
+              esac
+              new_pkgrel=$((current_pkgrel + 1))
+              echo "Mod request #$mr_issue: bumping pkgrel $current_pkgrel → $new_pkgrel"
+              sed -i "s/^pkgrel=.*/pkgrel=${new_pkgrel}/" PKGBUILD
             fi
-            sed -i "s/^pkgver=.*/pkgver=${new_ver}/" PKGBUILD
-            sed -i "s/^pkgrel=.*/pkgrel=${new_pkgrel}/" PKGBUILD
 
             # --- Refresh source hashes (canonical, Arch-native) ---
             # updpkgsums downloads every source from the (post-bump) PKGBUILD
@@ -228,28 +400,243 @@ jobs:
             cat .SRCINFO
 
             # --- Commit and push to AUR (skipped in dry-run) ---
-            if [ "${DRY_RUN:-false}" = "true" ]; then
+            if [ "$dry_run" = "true" ]; then
               echo "=== DRY RUN: previewing diff for ${pkgname} (no commit/push) ==="
-              git --no-pager diff PKGBUILD .SRCINFO
+              git status --short
+              git --no-pager diff
             else
               git remote set-url origin "ssh://aur@aur.archlinux.org/${pkgname}.git"
               git config user.name "${GIT_NAME:-github-actions}"
               git config user.email "${GIT_EMAIL:-41898282+github-actions[bot]@users.noreply.github.com}"
-              git add PKGBUILD .SRCINFO
+              # Everything the request touched: staging PKGBUILD/.SRCINFO only
+              # would leave files it added behind on every later run.
+              git add -A
               if ! git diff --cached --quiet; then
-                git commit -m "Update to v${new_ver}"
-                old_ver=$(awk -F= -v p="$pkgname" '$1==p {print $2}' /tmp/aur-old-vers.txt)
-                echo "${pkgname}: v${old_ver} -> v${new_ver}" >> /tmp/aur-updated.txt
+                pkg_msg=/tmp/aur-pkg-commit-msg.txt
+                mr_msg=""
+                if [ -n "$mr_issue" ]; then
+                  # The payload carries a message per package; the body was
+                  # re-read above, so this is the text the request was approved
+                  # with.
+                  mr_msg=$(python3 "$GITHUB_WORKSPACE/scripts/mod-request.py" \
+                    --root "$GITHUB_WORKSPACE" parse \
+                    -f "${mr_body_of[$mr_issue]}" |
+                    jq -r --arg p "$pkgname" '.payload[$p].message')
+                  [ -n "$mr_msg" ] || {
+                    echo "ERROR: mod request #$mr_issue has no commit message for $pkgname" >&2
+                    exit 1
+                  }
+                fi
+                if [ -n "$mr_issue" ] && [ "$new_ver" = "$current_pkgver" ] &&
+                  [ "$force" != "true" ]; then
+                  # A packaging change to the version already published: the
+                  # request's message is the commit.
+                  printf '%s\n' "$mr_msg" > "$pkg_msg"
+                else
+                  printf 'Update to v%s\n' "$new_ver" > "$pkg_msg"
+                  if [ -n "$mr_issue" ]; then
+                    printf '\n%s\n' "$mr_msg" >> "$pkg_msg"
+                  fi
+                fi
+                git commit -F "$pkg_msg"
+                worked=true
+                if [ "$new_ver" != "$current_pkgver" ]; then
+                  echo "${pkgname}: v${current_pkgver} -> v${new_ver}" >> /tmp/aur-updated.txt
+                fi
+                if [ -n "$mr_issue" ]; then
+                  echo "${pkgname}: v${new_ver} (mod request #${mr_issue})" >> /tmp/aur-mr-rows.txt
+                  printf '%s\t%s\t%s\n' "$mr_issue" "${mr_base_of[$mr_issue]}" "$pkgname" \
+                    >> /tmp/aur-mod-requests.txt
+                fi
                 GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts" git push origin HEAD:master
+              fi
+              # The record is written once per issue after the loop: it may only
+              # claim a package whose push left this runner, and a run that
+              # applies several packages to one request should move the progress
+              # list once.
+              if [ -n "$mr_issue" ]; then
+                # The record names the build the change landed in, not the
+                # request's base version: the two channels reach one base as
+                # different pkgver-pkgrel pairs.
+                full_ver=$(sed -n 's/^pkgver=//p' PKGBUILD)-$(sed -n 's/^pkgrel=//p' PKGBUILD)
+                echo "$pkgname=$full_ver" >> "/tmp/aur-mr-applied-$mr_issue.txt"
               fi
             fi
 
             cd ../..
-          done
+          done < /tmp/aur-targets.txt
+
+          # Only a run that pushed something may move the parent pointers.
+          echo "worked=$worked" >> "$GITHUB_OUTPUT"
+
+          # One record write per issue per run -- every push above has happened
+          # by now, and every package this run applied for the request goes in
+          # together -- then the completeness check that closes it.  The record
+          # is one comment: signature on its first line, the whole selection as
+          # a tasklist under it, so the list moves once and stays one list.
+          if [ "$dry_run" != "true" ]; then
+            for num in "${!mr_body_of[@]}"; do
+              applied_file="/tmp/aur-mr-applied-$num.txt"
+              [ -s "$applied_file" ] || continue
+              body="${mr_body_of[$num]}"
+              version="${mr_base_of[$num]}"
+              covered=$(python3 "$GITHUB_WORKSPACE/scripts/mod-request.py" \
+                --root "$GITHUB_WORKSPACE" resolve -f "$body" |
+                jq -R . | jq -s 'map(select(length > 0))')
+              # The file holds "<pkg>=<pkgver>-<pkgrel>": the full version goes
+              # into the record, the package name answers "is it covered?".
+              new_json=$(cut -d= -f1 "$applied_file" | sort -u | jq -R . | jq -s .)
+
+              # Read the record already there, add this run's packages, rewrite
+              # that same comment rather than stacking another one.
+              mr_comments="/tmp/aur-mr-comments-$num.json"
+              mr_record="/tmp/aur-mr-record-$num.md"
+              gh api "repos/$GITHUB_REPOSITORY/issues/$num/comments" \
+                --paginate --jq '.[]?' > "$mr_comments.ndjson" &&
+                jq -s . "$mr_comments.ndjson" > "$mr_comments" || {
+                  echo "ERROR: cannot read #$num's comments, so its record is not written" >&2
+                  exit 1
+                }
+              pkg_args=()
+              while IFS= read -r applied_pkg; do
+                pkg_args+=(--pkg "$applied_pkg")
+              done < <(sort -u "$applied_file")
+              python3 "$GITHUB_WORKSPACE/scripts/mod-request.py" \
+                --root "$GITHUB_WORKSPACE" token \
+                --issue "$num" --version "$version" \
+                --body "$body" \
+                --comments "$mr_comments" "${pkg_args[@]}" > "$mr_record" ||
+                {
+                  echo "ERROR: cannot sign the applied record for #$num (v$version)" >&2
+                  exit 1
+                }
+              comment_id=$(jq -r '[.[] | select(.body | startswith("<!-- mr-applied:"))]
+                | last | .id // empty' "$mr_comments")
+              if [ -n "$comment_id" ]; then
+                gh api -X PATCH \
+                  "repos/$GITHUB_REPOSITORY/issues/comments/$comment_id" \
+                  -F body=@"$mr_record" > /dev/null || {
+                    echo "ERROR: could not update the record on #$num" >&2
+                    exit 1
+                  }
+              else
+                gh api -X POST \
+                  "repos/$GITHUB_REPOSITORY/issues/$num/comments" \
+                  -F body=@"$mr_record" > /dev/null || {
+                    echo "ERROR: could not post the record to #$num" >&2
+                    exit 1
+                  }
+              fi
+              echo "mod request #$num: signed record updated ($(jq -r 'join(", ")' <<< "$new_json"))"
+
+              # Completeness is read back from the record: it says what any run
+              # has, so a request covering both channels closes once both builds
+              # are in it (the two channels reach one base version as separate
+              # builds).  `applied` is the same evaluator the gate uses, so a
+              # tick nobody can verify never closes anything.
+              gh api "repos/$GITHUB_REPOSITORY/issues/$num/comments" \
+                --paginate --jq '.[]?' > "$mr_comments.ndjson" &&
+                jq -s . "$mr_comments.ndjson" > "$mr_comments" || {
+                  echo "ERROR: cannot re-read #$num's comments after writing the record" >&2
+                  exit 1
+                }
+              if ! recorded=$(python3 "$GITHUB_WORKSPACE/scripts/mod-request.py" \
+                --root "$GITHUB_WORKSPACE" applied \
+                --issue "$num" --version "$version" \
+                --body "$body" --comments "$mr_comments"); then
+                echo "ERROR: cannot read #$num's record back" >&2
+                exit 1
+              fi
+              applied_json=$(printf '%s\n' "$recorded" | jq -R . | jq -s 'map(select(length > 0))')
+              complete=$(jq -r --argjson have "$applied_json" '
+                [.[] | . as $p | select(($have | index($p)) == null)]
+                | length == 0' <<< "$covered")
+              if [ "$complete" = "true" ]; then
+                gh issue close "$num" -R "$GITHUB_REPOSITORY" \
+                  -c "Every package this request covers is applied at v${version}." > /dev/null ||
+                  {
+                    echo "ERROR: could not close #$num" >&2
+                    exit 1
+                  }
+                echo "mod request #$num: every covered package applied, closed"
+              fi
+            done
+          fi
+
+          # --- Leave the verdict on the run --------------------------------
+          # A run that applied nothing is a normal outcome: a request can be
+          # pending, marked next_update, or aimed at a version this run does not
+          # reach -- all green, all with no commit, and the log was the only
+          # place that answer lived.  The step summary and one annotation put it
+          # on the run, which is where the history keeps it.
+          mr_notes="$scratch/mr-notes.txt"
+          grep '^apply-mod-request: ' "$report" |
+            grep -v '^apply-mod-request: warning: ' > "$mr_notes" || true
+          applied_count=${#mr_issue_of[@]}
+          held_count=${#mr_held_of[@]}
+          {
+            echo "### Mod requests"
+            echo
+            if [ "$applied_count" -gt 0 ] || [ "$held_count" -gt 0 ]; then
+              echo "| package | version | outcome |"
+              echo "| --- | --- | --- |"
+              while read -r pkg cur _tgt; do
+                if [ -n "${mr_issue_of[$pkg]:-}" ]; then
+                  printf '| %s | %s | applied (#%s) |\n' \
+                    "$pkg" "$cur" "${mr_issue_of[$pkg]}"
+                elif [ -n "${mr_held_of[$pkg]:-}" ]; then
+                  printf '| %s | %s | held -- #%s is not ready |\n' \
+                    "$pkg" "$cur" "${mr_held_of[$pkg]}"
+                fi
+              done < /tmp/aur-targets.txt
+              echo
+            fi
+            if [ "$applied_count" -eq 0 ] && [ "$held_count" -eq 0 ]; then
+              echo "Nothing applied this run."
+            elif [ "$held_count" -eq 0 ]; then
+              echo "Applied $applied_count package(s)."
+            else
+              echo "Applied $applied_count package(s), held $held_count."
+            fi
+            if [ "$worked" != "true" ]; then
+              echo
+              echo "No commit was made this run."
+            fi
+            if [ "$dry_run" = "true" ]; then
+              echo
+              echo "Dry run: nothing was pushed or recorded."
+            fi
+            if [ -s "$mr_notes" ]; then
+              echo
+              sed -e 's/^apply-mod-request: /- /' "$mr_notes"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # The verdict, in the one form the next run can read back:
+          # annotations are the only part of a finished run the API exposes
+          # (the step summary is UI only).  `applied=N` is the contract
+          # update-aur-approval.yaml's prune sweep consumes -- N > 0 keeps the
+          # row, 0 marks it a no-op -- and the reason rides along for a reader.
+          if [ "${APPROVAL:-false}" = "true" ]; then
+            if [ "$applied_count" -eq 0 ]; then
+              if [ "$held_count" -gt 0 ]; then
+                reason="$held_count package(s) held by a request that is not ready"
+              elif grep -q 'not due yet' "$mr_notes"; then
+                reason="the request targets a version the packages have not reached"
+              elif grep -q 'next_update is ticked' "$mr_notes"; then
+                reason="the request is marked next_update"
+              else
+                reason="no live request asked for a packaging change"
+              fi
+              echo "::notice title=Mod request approval::applied=0 held=$held_count -- $reason"
+            else
+              echo "::notice title=Mod request approval::applied=$applied_count held=$held_count"
+            fi
+          fi
 
       - name: Build parent pointer commit message
         id: pointer
-        if: steps.check.outputs.skip == 'false' && env.DRY_RUN != 'true'
+        if: steps.check.outputs.worked == 'true' && env.DRY_RUN != 'true'
         env:
           VERSION: ${{ steps.check.outputs.version }}
           INCONSISTENT: ${{ steps.check.outputs.inconsistent }}
@@ -257,37 +644,63 @@ jobs:
           GIT_EMAIL: ${{ secrets.GIT_EMAIL }}
         run: |
           set -euo pipefail
+          force=${FORCE:-false}
           # VERSION is the pkgver form (1.19.4pre1). Commit subjects keep that
           # spelling and just add the v prefix — one version shape in both AUR
           # and GitHub history (no tag re-expansion).
-          if [ "${FORCE:-false}" = "true" ]; then
+          #
+          # The body lists what moved.  A request-only run moves no version, so
+          # /tmp/aur-updated.txt is empty and the subject names the requests.
+          if [ "$force" = "true" ]; then
             # Force reuses the currently resolved targets; no version change,
             # so no update list in the body.
-            {
-              echo "fix: force update source hashes of v${VERSION}"
-            } > /tmp/aur-commit-msg.txt
-          else
+            subject="fix: force update source hashes of v${VERSION}"
+            : > /tmp/aur-pointer-body.txt
+          elif [ -s /tmp/aur-updated.txt ]; then
             case "${INCONSISTENT:-false}" in
               stable|pre) subject="fix: sync all packages to v${VERSION} in $INCONSISTENT channel" ;;
               both)       subject="fix: sync all packages to v${VERSION}" ;;
               *)          subject="Update to v${VERSION}" ;;
             esac
-            {
-              echo "$subject"
-              echo ""
-              cat /tmp/aur-updated.txt
-            } > /tmp/aur-commit-msg.txt
+            cp /tmp/aur-updated.txt /tmp/aur-pointer-body.txt
+          else
+            mapfile -t mr_rows < /tmp/aur-mod-requests.txt
+            mapfile -t mr_issues < <(printf '%s\n' "${mr_rows[@]}" | cut -f1 | sort -un)
+            mapfile -t mr_versions < <(printf '%s\n' "${mr_rows[@]}" | cut -f2 | sort -u)
+            mapfile -t mr_pkgs < <(printf '%s\n' "${mr_rows[@]}" | cut -f3 | sort -u)
+            list=$(printf '#%s, ' "${mr_issues[@]}")
+            list=${list%, }
+            if [ "${#mr_issues[@]}" -eq 1 ] && [ "${#mr_pkgs[@]}" -eq 1 ] &&
+              [ "${#mr_versions[@]}" -eq 1 ]; then
+              subject="fix(${mr_pkgs[0]}): apply mod request #${mr_issues[0]} at v${mr_versions[0]}"
+            elif [ "${#mr_versions[@]}" -eq 1 ]; then
+              subject="fix: apply mod requests ${list} at v${mr_versions[0]}"
+            else
+              subject="fix: apply mod requests ${list}"
+            fi
+            : > /tmp/aur-pointer-body.txt
           fi
+          # Applied requests append their rows whatever moved, so a version bump
+          # that carried one still records it.
+          cat /tmp/aur-mr-rows.txt >> /tmp/aur-pointer-body.txt
+          {
+            echo "$subject"
+            if [ -s /tmp/aur-pointer-body.txt ]; then
+              echo ""
+              cat /tmp/aur-pointer-body.txt
+            fi
+          } > /tmp/aur-commit-msg.txt
 
-          # Manual (workflow_dispatch) runs sign the parent-pointer commit as the
-          # owner; scheduled runs leave committer unset so it follows github-actions.
+          # Manual (workflow_dispatch) runs sign the parent-pointer commit as
+          # the owner; automated ones leave committer unset so it follows
+          # github-actions.
           if [ "${GITHUB_EVENT_NAME:-}" = "workflow_dispatch" ]; then
             echo "committer-name=${GIT_NAME}" >> "$GITHUB_OUTPUT"
             echo "committer-email=${GIT_EMAIL}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Update parent submodule pointers
-        if: steps.check.outputs.skip == 'false' && env.DRY_RUN != 'true'
+        if: steps.check.outputs.worked == 'true' && env.DRY_RUN != 'true'
         uses: ./.github/actions/commit-submodule-pointers
         with:
           message-file: /tmp/aur-commit-msg.txt

@@ -22,28 +22,24 @@ AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，分 **stable / pre 
 
 ## 工作流程
 
-本节只列流程概览与手动输入。版本判定规则、提交信息规范、容器环境限制等操作细节见 [AGENTS.md](AGENTS.md)。
+更新管道是 [`update-aur.yaml`](.github/workflows/update-aur.yaml)：
 
-### [`update-aur.yaml`](.github/workflows/update-aur.yaml)
+| 触发 | 场合 |
+|------|------|
+| `schedule`（每天 4:30 / 16:30 UTC） | 例行检查上游发版 |
+| `workflow_dispatch` | 手动运行，可传 `force` / `dry_run` |
+| `repository_dispatch`（`bettbox-release`） | [Bettbox](https://github.com/appshubcc/Bettbox) 发版流程 |
+| `workflow_call` | 由 [`update-aur-approval.yaml`](.github/workflows/update-aur-approval.yaml) 在批准 mod request 时调用 |
 
-定时（每天 4:30 / 16:30 UTC）、手动触发，或由 [Bettbox](https://github.com/appshubcc/Bettbox) 发版流程以 `repository_dispatch`（事件类型 `bettbox-release`）触发。job 运行在 `archlinux:base-devel` 容器内，使用 Arch 原生工具链：
+[`update-aur-approval.yaml`](.github/workflows/update-aur-approval.yaml) 是 issue 评论的唯一入口：批准评论先过一次内联预检（读请求与子模块里的已发布版本，判「现在落地会不会有变化」），只有会落地才调用同样的管道；每次运行还会清掉之前的空跑，只留下真正动过包的记录。
 
-1. **Check** — 每包按自己的 `.nvchecker.toml`（GitHub releases API）解析通道目标版本
-2. **Update** — 遍历 `aur/*/`：更新 pkgver/pkgrel，`updpkgsums` 刷新 checksum，`makepkg --printsrcinfo` 重生成 `.SRCINFO`，push 到 aur.archlinux.org
-3. **Parent pointer** — 更新父仓库的子模块指针
+一次运行做完解析、落地与父指针更新。`force` 绕过版本判定、版本不变也提 `pkgrel`（用于刷新 checksum），`dry_run` 只预览。
 
-写入 AUR 前有两重短路（作业级 + 逐包级）：版本已等于目标的包会被整包跳过，`pkgrel` 只在版本真正变化时归 1。
+修改打包内容走 **mod request**（issue，按版本号锚定）：`pending` 拦下本来要推进的版本，`ready` 随该版本一起落地，版本不动时也能单独落地。格式与操作见 [skill](.agents/skills/mod-request/SKILL.md)。
 
-手动触发可传两个 input：
+[`sync-from-aur.yaml`](.github/workflows/sync-from-aur.yaml) 是反向同步：手动触发，把 AUR 上的最新提交同步回父仓库指针。
 
-- `force`：绕过两重短路，即使版本已等于通道目标也照样提 `pkgrel`（+1），用于刷新 checksum / 强制重推
-- `dry_run`：只预览 PKGBUILD/.SRCINFO 的 diff，不提交不推送（与 `force` 组合 = 预览 pkgrel+1 的产物）
-
-`repository_dispatch` 没有 input，两个开关改从 `client_payload` 读（布尔），语义同上。
-
-### [`sync-from-aur.yaml`](.github/workflows/sync-from-aur.yaml)
-
-手动触发，将 AUR 上的最新提交同步回父仓库指针（用于 AUR 被独立修改后的逆向同步）。在 commit body 中记录每个子模块的新增 commit log。
+版本判定、逐包落地规则、提交信息与容器限制等细节见 [AGENTS.md](AGENTS.md)。
 
 ## 子模块管理
 

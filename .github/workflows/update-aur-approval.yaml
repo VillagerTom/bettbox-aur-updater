@@ -1,0 +1,203 @@
+name: Update AUR packages (approval)
+run-name: "Update AUR packages for mod request #${{ github.event.issue.number }}"
+
+# The issue trigger lives here and only here.  `issue_comment` starts a run for
+# every comment on every issue, so keeping it in its own workflow leaves the
+# update pipeline's history to the schedule and the releases, and gives these
+# runs a list of their own to prune.
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+jobs:
+  prune:
+    # Keep the rows that did something, drop the ones that did nothing.  A run
+    # cannot delete itself: the API only deletes runs that have completed (or
+    # are more than two weeks old), and cancelling first would kill this job
+    # before it could retry.  So every run sweeps the completed runs behind it.
+    #
+    # What makes a run a no-op travels as an `applied=N` annotation: triage
+    # writes it when it proves this approval cannot land anything, the pipeline
+    # writes it after landing (0 is possible -- the request can stop being live
+    # between the two).  A run with no verdict never ran the pipeline at all: a
+    # comment that was not an approval pin.  Both are swept; a run that applied
+    # at least one package stays, and so does every failure -- that is the one
+    # row that has to survive until a person has looked at it.  The effects of
+    # a cancelled run live in git history either way.
+    #
+    # No `if`: a comment that is not an approval pin still leaves a run behind,
+    # and that is one of the rows this exists to remove.
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Delete the no-op runs of this workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # GITHUB_WORKFLOW_REF is <repo>/.github/workflows/<file>@<ref>; the
+          # listing takes the bare file name, so a rename cannot leave this
+          # pointing at another workflow.
+          workflow=${GITHUB_WORKFLOW_REF%@*}
+          workflow=${workflow##*/}
+          # Succeeded or cancelled runs can be no-ops.  Failures are never
+          # touched, and a listing failure deletes nothing at all.
+          if ! ids=$(gh run list --repo "$GITHUB_REPOSITORY" \
+            --workflow "$workflow" --status completed --limit 50 \
+            --json databaseId,conclusion \
+            --jq '.[] | select(.conclusion == "success" or .conclusion == "cancelled") | .databaseId'); then
+            echo "::warning::cannot list the runs of $workflow; nothing deleted"
+            exit 0
+          fi
+          for id in $ids; do
+            if ! jobs=$(gh run view "$id" --repo "$GITHUB_REPOSITORY" \
+                 --json jobs --jq '[.jobs[].databaseId] | join(" ")'); then
+              echo "::warning::cannot read the jobs of run $id; it stays in the list"
+              continue
+            fi
+            verdict=none
+            for job in $jobs; do
+              if ! text=$(gh api "repos/$GITHUB_REPOSITORY/check-runs/$job/annotations" \
+                   --jq '.[] | ((.title // "") + " " + (.message // ""))'); then
+                echo "::warning::cannot read the annotations of job $job (run $id); it stays in the list"
+                verdict=unknown
+                break
+              fi
+              found=$(grep -o 'applied=[0-9]*' <<< "$text" | tail -1 | cut -d= -f2 || true)
+              if [ -n "$found" ]; then
+                verdict=$found
+              fi
+            done
+            if [ "$verdict" != "none" ] && [ "$verdict" != "0" ]; then
+              echo "run $id applied $verdict package(s); kept"
+              continue
+            fi
+            # Pruning is housekeeping: it never fails the run it is part of.
+            if gh run delete "$id" --repo "$GITHUB_REPOSITORY"; then
+              echo "deleted no-op run $id of $workflow"
+            else
+              echo "::warning::could not delete run $id; it stays in the list"
+            fi
+          done
+
+  triage:
+    # An approval is a pin comment from someone with write access.  The pin is
+    # what `approve-mod-request.sh` posts on every approval -- a re-approval
+    # posts another one, while the `approved` label does not change -- so the
+    # pin is the trigger, checked here before anything else starts.
+    if: >-
+      github.event.issue.pull_request == null &&
+      github.event.issue.state == 'open' &&
+      startsWith(github.event.comment.body, '<!-- mr-approved sha256=') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Setup submodules
+        uses: ./.github/actions/setup-submodules
+        with:
+          ssh-key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+
+      - name: Decide whether this approval can change anything
+        id: verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          # The pipeline below runs only when this approval can land something,
+          # and skipping needs proof read from the same source the pipeline
+          # reads: the submodule checkouts above, not the AUR RPC -- the two
+          # can disagree while a sync lags.
+          #
+          # An approval folds every target onto the published version, so the
+          # pipeline applies exactly when the request is ready, next_update is
+          # unticked, and a covered package already sits on the request's base
+          # version.  Anything unproven runs the pipeline anyway: a wasted
+          # no-op run costs minutes, a dropped approval sits until cron.  The
+          # base is cut exactly like apply-mod-request.sh cuts it.
+          apply=true
+          reason="running the pipeline"
+          if body=$(gh issue view "$ISSUE" -R "$GITHUB_REPOSITORY" --json body -q '.body // ""'); then
+            printf '%s' "$body" > request.md
+            if parsed=$(python3 scripts/mod-request.py parse -f request.md); then
+              state=$(jq -r '.diff_state' <<< "$parsed")
+              next=$(jq -r '.next_update' <<< "$parsed")
+              ver=$(jq -r '.target_version' <<< "$parsed")
+              if [ "$state" != "ready" ]; then
+                apply=false
+                reason="diff_state is ${state}"
+              elif [ "$next" = "true" ]; then
+                apply=false
+                reason="next_update is ticked"
+              else
+                versions=
+                unproven=
+                while IFS= read -r pkg; do
+                  [ -n "$pkg" ] || continue
+                  pv=$(sed -n 's/^pkgver=//p' "aur/$pkg/PKGBUILD" 2>/dev/null || true)
+                  if [ -z "$pv" ]; then
+                    unproven="$pkg is not in aur/*"
+                    break
+                  fi
+                  base=$(printf '%s' "$pv" | sed -E 's/pre[0-9]+$//')
+                  if [ "$base" = "$ver" ]; then
+                    reason="$pkg is at v$pv, the request's base is v$ver"
+                    versions=
+                    break
+                  fi
+                  versions="${versions:+$versions, }$pkg at v$pv"
+                done < <(python3 scripts/mod-request.py resolve -f request.md)
+                if [ -n "$unproven" ]; then
+                  reason="$unproven; let the pipeline decide"
+                elif [ -n "$versions" ]; then
+                  apply=false
+                  reason="$versions -- none on v$ver yet"
+                fi
+              fi
+            else
+              reason="the body does not parse as a request; let the pipeline decide"
+            fi
+          else
+            reason="cannot read the issue; let the pipeline decide"
+          fi
+          echo "apply=$apply" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          if [ "$apply" = "false" ]; then
+            # The marker the prune sweep reads back: this run will never have a
+            # pipeline verdict of its own.
+            echo "::notice title=Mod request approval::applied=0 held=0 -- $reason"
+          fi
+          echo "$reason"
+
+  update-aur-approval:
+    # Only a triage verdict that says something can land starts the pipeline.
+    # It still re-checks the pin, the label, the body and the version rule
+    # itself; this gate only keeps a proven no-op from starting the container.
+    needs: [triage]
+    if: needs.triage.outputs.apply == 'true'
+    # A called workflow may only maintain or reduce these, and update-aur.yaml
+    # asks for exactly the same two.
+    permissions:
+      contents: write
+      issues: write
+    uses: ./.github/workflows/update-aur.yaml
+    # `approval` is what makes the pipeline resolve against the published
+    # versions; it cannot be inferred from the event name inside a called
+    # workflow, so the caller states it.
+    with:
+      approval: true
+    secrets:
+      AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+      GIT_NAME: ${{ secrets.GIT_NAME }}
+      GIT_EMAIL: ${{ secrets.GIT_EMAIL }}

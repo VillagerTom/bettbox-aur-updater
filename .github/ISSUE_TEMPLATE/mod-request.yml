@@ -1,0 +1,245 @@
+name: Mod request
+description: 请求修改 AUR 包的打包内容；按版本号锚定，pre 与正式版按各自节奏生效
+title: "[mod] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        这个表单用于**修改 AUR 上的打包内容**（`PKGBUILD`），经维护者审批（加 `approved` 标签）
+        后，由 CI 自动应用并提交至 AUR 仓库。
+
+        填写要点：
+
+        - `target_version` 填这次改动要适配的版本号，例如 `1.20.0`。不写 `-pre` 后缀：
+          同一个版本号的 pre 版和正式版共用这一条请求。
+        - 如果适配方案还没写出来，把 `diff_state` 选 `pending`，先占位挡住发版；
+          等方案确定后再改成 `ready` 并补上每包的 diff。
+        - `type` / `variant` / `edition` 决定受影响的包，脚本按仓库里实际存在的包解析；
+          一条请求同时覆盖 stable 与 pre 两个通道的同款包。
+        - `ready` 时**只填受影响的包**的 payload，其余留空。
+        - 只有「取代一个已经部分应用的旧请求」时才填 `supersedes`（旧请求的 issue 编号），
+          其余留空；它不是权限声明，仓库会自己核对取代关系。
+        - 表单里的标签（`summary`、`target_version`、`type` …）是机器读取用的键名，
+          请不要在 Web 界面里改名。
+
+  - type: input
+    id: supersedes
+    attributes:
+      label: supersedes
+      description: 仅当本请求取代一个同版本、已部分应用（已有 CI 贴的 applied record）的旧请求时填写，否则留空
+      placeholder: "#12"
+
+  - type: input
+    id: summary
+    attributes:
+      label: summary
+      description: 一句话说明这个改动解决什么问题
+      placeholder: "上游 PR #159 已合并：构建逻辑并入 setup.dart，打包需相应调整"
+    validations:
+      required: true
+
+  - type: input
+    id: target_version
+    attributes:
+      label: target_version
+      description: 本次改动适配的版本号，形如 1.20.0（不带 -pre/-test 后缀）。等于或高于这个 base 版本的包会使用本改动
+      placeholder: "1.20.0"
+    validations:
+      required: true
+
+  # 复选框（单个选项 = 布尔）。当 target_version 正好等于某包已在的 base 版本
+  # （pre 通道常见：1.20.0pre1/pre2/pre3 同 base）时，勾上表示"别动已经发出去的那个
+  # 版本，等该包下一次升版本再用这条请求"。
+  - type: checkboxes
+    id: next_update
+    attributes:
+      label: next_update
+      description: 勾上 = 不应用到当前已发布的版本，等该包下一次升版本时再启用
+      options:
+        - label: 不要应用到当前版本，等该包下一次升版本时再启用
+
+  # 选包是 3 个多选维度，不是包名列表。具体包由脚本按 aur/* 里实际存在的包解析：
+  # 通道不在维度里——一条请求同时覆盖 stable 与 pre 的孪生包，各自到达 target_version
+  # 时生效。
+  - type: dropdown
+    id: type
+    attributes:
+      label: type
+      description: source = 源码构建；bin = 预编译二进制。可多选
+      multiple: true
+      options:
+        - source
+        - bin
+    validations:
+      required: true
+
+  - type: dropdown
+    id: variant
+    attributes:
+      label: variant
+      description: common = 常规构建；compatible = GOAMD64=v1 兼容构建。可多选
+      multiple: true
+      options:
+        - common
+        - compatible
+    validations:
+      required: true
+
+  - type: dropdown
+    id: edition
+    attributes:
+      label: edition
+      description: standard = 常规版；lite = 轻量版（上游已发布，本仓库尚未实装，选中会校验失败）。可多选
+      multiple: true
+      options:
+        - standard
+        - lite
+    validations:
+      required: true
+
+  - type: dropdown
+    id: diff_state
+    attributes:
+      label: diff_state
+      description: pending = 改动尚未确定，只用来挡住发版；ready = 下面的 payload 已经写好
+      options:
+        - pending
+        - ready
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: evidence
+      description: 你本地验证过什么，方便 reviewer 复核：构建结论、装包手测结果，或相关日志
+      placeholder: |
+        makepkg 通过；装包后启动正常
+    validations:
+      required: false
+
+  - type: textarea
+    id: payload-bettbox
+    attributes:
+      label: "payload: bettbox"
+      description: 仅当该包被 type/variant/edition 选中且 diff_state=ready 时填写；两个四反引号代码块，先 diff 后提交信息。diff 可改该包目录下任意文件（.SRCINFO、.nvchecker.toml 除外），不得创建符号链接
+      placeholder: |
+        ````diff
+        --- a/PKGBUILD
+        +++ b/PKGBUILD
+        @@ ...
+        ````
+
+        ````text
+        fix(pkg): ...
+        ````
+    validations:
+      required: false
+
+  - type: textarea
+    id: payload-bettbox-compatible
+    attributes:
+      label: "payload: bettbox-compatible"
+      description: 仅当该包被 type/variant/edition 选中且 diff_state=ready 时填写；两个四反引号代码块，先 diff 后提交信息。diff 可改该包目录下任意文件（.SRCINFO、.nvchecker.toml 除外），不得创建符号链接
+      placeholder: |
+        ````diff
+        --- a/PKGBUILD
+        +++ b/PKGBUILD
+        @@ ...
+        ````
+
+        ````text
+        fix(pkg): ...
+        ````
+    validations:
+      required: false
+
+  - type: textarea
+    id: payload-bettbox-compatible-bin
+    attributes:
+      label: "payload: bettbox-compatible-bin"
+      description: 仅当该包被 type/variant/edition 选中且 diff_state=ready 时填写；两个四反引号代码块，先 diff 后提交信息。diff 可改该包目录下任意文件（.SRCINFO、.nvchecker.toml 除外），不得创建符号链接
+      placeholder: |
+        ````diff
+        --- a/PKGBUILD
+        +++ b/PKGBUILD
+        @@ ...
+        ````
+
+        ````text
+        fix(pkg): ...
+        ````
+    validations:
+      required: false
+
+  - type: textarea
+    id: payload-bettbox-compatible-pre
+    attributes:
+      label: "payload: bettbox-compatible-pre"
+      description: 仅当该包被 type/variant/edition 选中且 diff_state=ready 时填写；两个四反引号代码块，先 diff 后提交信息。diff 可改该包目录下任意文件（.SRCINFO、.nvchecker.toml 除外），不得创建符号链接
+      placeholder: |
+        ````diff
+        --- a/PKGBUILD
+        +++ b/PKGBUILD
+        @@ ...
+        ````
+
+        ````text
+        fix(pkg): ...
+        ````
+    validations:
+      required: false
+
+  - type: textarea
+    id: payload-bettbox-compatible-pre-bin
+    attributes:
+      label: "payload: bettbox-compatible-pre-bin"
+      description: 仅当该包被 type/variant/edition 选中且 diff_state=ready 时填写；两个四反引号代码块，先 diff 后提交信息。diff 可改该包目录下任意文件（.SRCINFO、.nvchecker.toml 除外），不得创建符号链接
+      placeholder: |
+        ````diff
+        --- a/PKGBUILD
+        +++ b/PKGBUILD
+        @@ ...
+        ````
+
+        ````text
+        fix(pkg): ...
+        ````
+    validations:
+      required: false
+
+  - type: textarea
+    id: payload-bettbox-pre
+    attributes:
+      label: "payload: bettbox-pre"
+      description: 仅当该包被 type/variant/edition 选中且 diff_state=ready 时填写；两个四反引号代码块，先 diff 后提交信息。diff 可改该包目录下任意文件（.SRCINFO、.nvchecker.toml 除外），不得创建符号链接
+      placeholder: |
+        ````diff
+        --- a/PKGBUILD
+        +++ b/PKGBUILD
+        @@ ...
+        ````
+
+        ````text
+        fix(pkg): ...
+        ````
+    validations:
+      required: false
+
+  - type: textarea
+    id: payload-bettbox-pre-bin
+    attributes:
+      label: "payload: bettbox-pre-bin"
+      description: 仅当该包被 type/variant/edition 选中且 diff_state=ready 时填写；两个四反引号代码块，先 diff 后提交信息。diff 可改该包目录下任意文件（.SRCINFO、.nvchecker.toml 除外），不得创建符号链接
+      placeholder: |
+        ````diff
+        --- a/PKGBUILD
+        +++ b/PKGBUILD
+        @@ ...
+        ````
+
+        ````text
+        fix(pkg): ...
+        ````
+    validations:
+      required: false
