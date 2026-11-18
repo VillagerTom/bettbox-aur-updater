@@ -72,6 +72,7 @@ The update job runs git as root and makepkg as a throwaway `builder` user inside
 - `git config --global --add safe.directory '*'` is set in **both** `setup-submodules` and the main step so root git ops tolerate the live owner transition (`chown -R builder "$GITHUB_WORKSPACE"` happens mid-job).
 - OpenSSH resolves `~/.ssh` from the **passwd home** (`/root`), not `$HOME` (`/github/home`) — so every `GIT_SSH_COMMAND` uses explicit `$HOME`-expanded paths: `ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts`. `setup-submodules` writes the key and the keyscan'd known_hosts into `$HOME/.ssh`.
 - makepkg refuses to run as root: the `run_makepkg` wrapper runs `runuser -u builder -- env ...` with `BUILDDIR/PKGDEST/SRCDEST` under `/tmp`.
+- `updpkgsums` rewrites `PKGBUILD` **in place**, and current pacman-contrib does that with `cat > $buildfile`, which needs write permission on the file itself. The root-side `sed -i` pkgver/pkgrel patches rename a root-owned temp over the file, so the loop runs `chown builder:builder PKGBUILD` right before `run_makepkg updpkgsums` — do not remove it: without it every patching path (version bump, force, mod request) dies with `updpkgsums: PKGBUILD: Permission denied` (run 44243778050).
 
 ## Submodules run detached HEAD
 
