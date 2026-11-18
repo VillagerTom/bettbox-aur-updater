@@ -89,7 +89,7 @@ body:
     id: edition
     attributes:
       label: edition
-      description: standard = 常规版；lite = 轻量版（上游已发布，本仓库尚未实装，选中会校验失败）。可多选
+      description: standard = 常规版；lite = 轻量版（bettbox-lite… 8 个包）。可多选
       multiple: true
       options:
         - standard
@@ -194,6 +194,150 @@ body:
     id: payload-bettbox-compatible-pre-bin
     attributes:
       label: "payload: bettbox-compatible-pre-bin"
+      description: 仅当该包被 type/variant/edition 选中且 diff_state=ready 时填写；两个四反引号代码块，先 diff 后提交信息。diff 可改该包目录下任意文件（.SRCINFO、.nvchecker.toml 除外），不得创建符号链接
+      placeholder: |
+        ````diff
+        --- a/PKGBUILD
+        +++ b/PKGBUILD
+        @@ ...
+        ````
+
+        ````text
+        fix(pkg): ...
+        ````
+    validations:
+      required: false
+
+  - type: textarea
+    id: payload-bettbox-lite
+    attributes:
+      label: "payload: bettbox-lite"
+      description: 仅当该包被 type/variant/edition 选中且 diff_state=ready 时填写；两个四反引号代码块，先 diff 后提交信息。diff 可改该包目录下任意文件（.SRCINFO、.nvchecker.toml 除外），不得创建符号链接
+      placeholder: |
+        ````diff
+        --- a/PKGBUILD
+        +++ b/PKGBUILD
+        @@ ...
+        ````
+
+        ````text
+        fix(pkg): ...
+        ````
+    validations:
+      required: false
+
+  - type: textarea
+    id: payload-bettbox-lite-bin
+    attributes:
+      label: "payload: bettbox-lite-bin"
+      description: 仅当该包被 type/variant/edition 选中且 diff_state=ready 时填写；两个四反引号代码块，先 diff 后提交信息。diff 可改该包目录下任意文件（.SRCINFO、.nvchecker.toml 除外），不得创建符号链接
+      placeholder: |
+        ````diff
+        --- a/PKGBUILD
+        +++ b/PKGBUILD
+        @@ ...
+        ````
+
+        ````text
+        fix(pkg): ...
+        ````
+    validations:
+      required: false
+
+  - type: textarea
+    id: payload-bettbox-lite-compatible
+    attributes:
+      label: "payload: bettbox-lite-compatible"
+      description: 仅当该包被 type/variant/edition 选中且 diff_state=ready 时填写；两个四反引号代码块，先 diff 后提交信息。diff 可改该包目录下任意文件（.SRCINFO、.nvchecker.toml 除外），不得创建符号链接
+      placeholder: |
+        ````diff
+        --- a/PKGBUILD
+        +++ b/PKGBUILD
+        @@ ...
+        ````
+
+        ````text
+        fix(pkg): ...
+        ````
+    validations:
+      required: false
+
+  - type: textarea
+    id: payload-bettbox-lite-compatible-bin
+    attributes:
+      label: "payload: bettbox-lite-compatible-bin"
+      description: 仅当该包被 type/variant/edition 选中且 diff_state=ready 时填写；两个四反引号代码块，先 diff 后提交信息。diff 可改该包目录下任意文件（.SRCINFO、.nvchecker.toml 除外），不得创建符号链接
+      placeholder: |
+        ````diff
+        --- a/PKGBUILD
+        +++ b/PKGBUILD
+        @@ ...
+        ````
+
+        ````text
+        fix(pkg): ...
+        ````
+    validations:
+      required: false
+
+  - type: textarea
+    id: payload-bettbox-lite-compatible-pre
+    attributes:
+      label: "payload: bettbox-lite-compatible-pre"
+      description: 仅当该包被 type/variant/edition 选中且 diff_state=ready 时填写；两个四反引号代码块，先 diff 后提交信息。diff 可改该包目录下任意文件（.SRCINFO、.nvchecker.toml 除外），不得创建符号链接
+      placeholder: |
+        ````diff
+        --- a/PKGBUILD
+        +++ b/PKGBUILD
+        @@ ...
+        ````
+
+        ````text
+        fix(pkg): ...
+        ````
+    validations:
+      required: false
+
+  - type: textarea
+    id: payload-bettbox-lite-compatible-pre-bin
+    attributes:
+      label: "payload: bettbox-lite-compatible-pre-bin"
+      description: 仅当该包被 type/variant/edition 选中且 diff_state=ready 时填写；两个四反引号代码块，先 diff 后提交信息。diff 可改该包目录下任意文件（.SRCINFO、.nvchecker.toml 除外），不得创建符号链接
+      placeholder: |
+        ````diff
+        --- a/PKGBUILD
+        +++ b/PKGBUILD
+        @@ ...
+        ````
+
+        ````text
+        fix(pkg): ...
+        ````
+    validations:
+      required: false
+
+  - type: textarea
+    id: payload-bettbox-lite-pre
+    attributes:
+      label: "payload: bettbox-lite-pre"
+      description: 仅当该包被 type/variant/edition 选中且 diff_state=ready 时填写；两个四反引号代码块，先 diff 后提交信息。diff 可改该包目录下任意文件（.SRCINFO、.nvchecker.toml 除外），不得创建符号链接
+      placeholder: |
+        ````diff
+        --- a/PKGBUILD
+        +++ b/PKGBUILD
+        @@ ...
+        ````
+
+        ````text
+        fix(pkg): ...
+        ````
+    validations:
+      required: false
+
+  - type: textarea
+    id: payload-bettbox-lite-pre-bin
+    attributes:
+      label: "payload: bettbox-lite-pre-bin"
       description: 仅当该包被 type/variant/edition 选中且 diff_state=ready 时填写；两个四反引号代码块，先 diff 后提交信息。diff 可改该包目录下任意文件（.SRCINFO、.nvchecker.toml 除外），不得创建符号链接
       placeholder: |
         ````diff

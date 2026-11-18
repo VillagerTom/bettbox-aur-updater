@@ -44,15 +44,16 @@ description: 生成、校验并发布 mod-request issue（AUR 打包改动请求
 | `next_update` | 复选框 | 勾上 = 不应用到当前已发布的版本，等该包下一次升版本时再启用 |
 | `type` | 多选 `source` / `bin` | 源码构建 / 预编译二进制 |
 | `variant` | 多选 `common` / `compatible` | 常规构建 / `GOAMD64=v1` 兼容构建 |
-| `edition` | 多选 `standard` / `lite` | 常规版 / 轻量版（`lite` 上游已发布，本仓库尚未实装，选中会校验失败） |
+| `edition` | 多选 `standard` / `lite` | 常规版 / 轻量版（`bettbox-lite…` 8 个包） |
 | `diff_state` | `pending` / `ready` | `pending` 只参与门禁，不携带 diff |
 | `evidence` | 自由文本 | 本地验证证据，CI 读不到，只记录 |
 | `payload: <pkg>` | 每包一段 | 该包的 diff + `message`；仅 `ready` 时非空 |
 
 **包不直接列出来**，由三个维度按 `aur/*` 里实际存在的包解析：`bettbox[-lite][-compatible][-pre][-bin]`。
 通道不在维度里——一选就是 stable 与 pre 两个孪生包，各自到达 `target_version` 时生效。
-所以选 `source` + `common` 会解析出 `bettbox` 与 `bettbox-pre` 两个包；选 `bin` + `common` 只解析出
-`bettbox-pre-bin`（stable 的 `bettbox-bin` 是另一位维护者的包，不在本仓库）。
+所以选 `source` + `common` + `standard` 会解析出 `bettbox` 与 `bettbox-pre` 两个包；选
+`bin` + `common` + `standard` 只解析出 `bettbox-pre-bin`（stable 的 `bettbox-bin` 是另一位维护者的包，
+不在本仓库）；同样的选择把 `edition` 换成 `lite` 则解析出 `bettbox-lite-bin` 与 `bettbox-lite-pre-bin`。
 
 `supersedes` 是正文里唯一能声明的**关系**：一个版本已经部分应用、需要再改时，不是编辑旧 issue，而是
 另开一条并把旧编号写在这里。它只是声明，不是权限——取代关系由 `supersede` 校验（同
@@ -294,7 +295,7 @@ python3 scripts/mod-request.py \
   check-form --form .github/ISSUE_TEMPLATE/mod-request.yml
 ```
 
-- 常见失败：`target_version` 带了 `pre` 后缀；选了 `lite`（本仓库还没有 lite 包）；
+- 常见失败：`target_version` 带了 `pre` 后缀；
   `payload` 缺包或多包（选了没写、写了没选）；diff 改了 `pkgver`/`pkgrel`；
   `message` 缺失或以空行开头；内容里出现 4 个以上反引号的行；`summary`/`evidence` 里出现行首
   `### `（会把正文切成两段）；正文超过 65536 字符（GitHub 上限，diff 大时要拆成两条请求）。

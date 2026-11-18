@@ -19,3 +19,27 @@
 [submodule "aur/bettbox-pre-bin"]
 	path = aur/bettbox-pre-bin
 	url = ssh://aur@aur.archlinux.org/bettbox-pre-bin.git
+[submodule "aur/bettbox-lite"]
+	path = aur/bettbox-lite
+	url = ssh://aur@aur.archlinux.org/bettbox-lite.git
+[submodule "aur/bettbox-lite-bin"]
+	path = aur/bettbox-lite-bin
+	url = ssh://aur@aur.archlinux.org/bettbox-lite-bin.git
+[submodule "aur/bettbox-lite-compatible"]
+	path = aur/bettbox-lite-compatible
+	url = ssh://aur@aur.archlinux.org/bettbox-lite-compatible.git
+[submodule "aur/bettbox-lite-compatible-bin"]
+	path = aur/bettbox-lite-compatible-bin
+	url = ssh://aur@aur.archlinux.org/bettbox-lite-compatible-bin.git
+[submodule "aur/bettbox-lite-pre"]
+	path = aur/bettbox-lite-pre
+	url = ssh://aur@aur.archlinux.org/bettbox-lite-pre.git
+[submodule "aur/bettbox-lite-pre-bin"]
+	path = aur/bettbox-lite-pre-bin
+	url = ssh://aur@aur.archlinux.org/bettbox-lite-pre-bin.git
+[submodule "aur/bettbox-lite-compatible-pre"]
+	path = aur/bettbox-lite-compatible-pre
+	url = ssh://aur@aur.archlinux.org/bettbox-lite-compatible-pre.git
+[submodule "aur/bettbox-lite-compatible-pre-bin"]
+	path = aur/bettbox-lite-compatible-pre-bin
+	url = ssh://aur@aur.archlinux.org/bettbox-lite-compatible-pre-bin.git

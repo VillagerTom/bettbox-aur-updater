@@ -6,15 +6,18 @@ Manages AUR packages for [Bettbox](https://github.com/appshubcc/Bettbox). The re
 
 ## Structure
 
-The package inventory (seven `aur/*/` submodules, stable / pre channels, arch + build type per package) is the table in [README.md](README.md). Agent-relevant rules on top of it:
+The package inventory (fifteen `aur/*/` submodules, stable / pre channels, standard / lite editions, arch + build type per package) is the table in [README.md](README.md). Agent-relevant rules on top of it:
 
 - The channel is the `*-pre` pkgname suffix (no suffix = stable).
-- All seven packages normalize to one install layout and `provides=bettbox=<ver>` (via `${pkgname%-…}`) and conflict with each other — keep new packages consistent with that.
+- The edition is the `-lite` token, which sits directly after `bettbox` and leaves the rest of the name in its usual order (`bettbox-lite-compatible-pre-bin`). A lite package resolves from the same tags as its standard twin, so a channel bump covers both editions.
+- All fifteen packages normalize to one install layout and `provides=bettbox=<ver>` (via `${pkgname%-…}`), and every package's `conflicts` names the other fifteen siblings — the fourteen in this repo plus `bettbox-bin`, which belongs to another maintainer. Keep new packages consistent with that, and never shorten the list.
 - Each `aur/<pkg>` is a git submodule at `ssh://aur@aur.archlinux.org/<pkgname>.git`; README's 子模块管理 has the clone/add commands.
 
 ### Multi-arch `-bin` packages and `${arch}` in per-arch sources
 
 Upstream names its Linux debs by Debian architecture (`amd64`/`arm64`), which never matches the AUR names (`x86_64`/`aarch64`), so a dual-arch `-bin` PKGBUILD spells out **both** the cache name and the URL per architecture. `${arch}` must not be used there: makepkg binds it to the **host** architecture while expanding per-arch arrays, so `source_aarch64` would expand `${arch}` to `x86_64` and collide with `source_x86_64`. See `aur/bettbox-pre-bin/PKGBUILD`.
+
+The `compatible` packages are x86_64-only by construction: `GOAMD64=v1` is an amd64 microarchitecture level, so neither edition has an aarch64 compatible twin and no such package should be created.
 
 ## Version model
 
@@ -23,7 +26,7 @@ Upstream names its Linux debs by Debian architecture (`amd64`/`arm64`), which ne
   - pre accepts formal *and* `-pre` tags; its target is whichever of the two versions higher;
   - the two channel targets are equal exactly when no `-pre` is newer than the latest formal tag. Upstream ships a `-pre` series ahead of every formal tag, so pre sits ahead through most of a release cycle and the two coincide only in the window after a formal release. Either way each channel resolves its target on its own.
 - nvchecker does the ordering per PEP440: `-pre1` normalizes to `rc1`, so `v1.19.4` > `v1.19.4-pre1` and `use_max_release = true` picks the formal tag on its own.
-- The pre channel has 4 packages, stable 3 (`bettbox-pre-bin` is pre-only because the stable slot `bettbox-bin` belongs to another maintainer).
+- The pre channel has 8 packages, stable 7: standard contributes 3 stable and 4 pre (`bettbox-pre-bin` is pre-only because the standard stable-bin slot `bettbox-bin` belongs to another maintainer), and the lite edition contributes 4 of each.
 - pkgver never contains a hyphen (makepkg rejects it): pre versions are spelled `1.19.4pre1`. `_pkgver="${pkgver/pre/-pre}"` re-inserts the hyphen for the tarball URL (`archive/v1.19.4-pre1.tar.gz`) and the extracted source dir. It is a no-op at a formal pkgver and still required while a `-pre` is ahead — do not remove it.
 - Source PKGBUILDs select `APP_ENV` from the version: `local app_env=stable; [[ "${pkgver}" == *pre* ]] && app_env=pre`. **This line needs no per-channel adjustment**: upstream's own rule is "no `-` in the ref means a stable build", so pre picking up a formal tag installs that tag's `APP_ENV=stable` artifact. pkgver tracks exactly what gets installed.
 - Each package carries its own `.nvchecker.toml` (GitHub releases API — drafts and tag-only releases are excluded; junk tags like `v1.19.2-test` never surface). The GitHub token goes through a keyfile in CI (`[keys] github = ...`), **not** the `GITHUB_TOKEN` env var (that returns 403).
@@ -59,11 +62,11 @@ Updating is **one** pipeline, `update-aur.yaml`: it resolves the channel targets
 
 - `.SRCINFO` is **always** regenerated via `makepkg --printsrcinfo`, run as the `builder` user inside the container job. Never hand-edit `.SRCINFO`.
 - Checksums are refreshed by `updpkgsums`, which downloads every source (including the `sha256sums_x86_64/_aarch64` arrays) and is idempotent for the local hook/desktop files.
-- Updates are atomic **per channel** (3 stable packages, 4 pre packages): if one package in a channel is behind, the whole channel gets bumped. When both channel targets coincide a run advances all seven packages at once; when they differ each channel advances on its own and the pointer-commit subject names the channel that moved.
-- One per-package skip guards writes, and it is the only one: a package whose pkgver already equals its target is skipped whole on a non-force run (no pkgver/pkgrel write, no `updpkgsums`, no `makepkg --printsrcinfo`, no commit), so a run that moves one channel does not reset the other channel's already-settled `pkgrel`. There is no run-level "nothing to do" gate: the loop always visits all seven packages, and the parent-pointer steps wait for `worked`, which only turns true once a commit exists.
+- Updates are atomic **per channel** (7 stable packages, 8 pre packages): if one package in a channel is behind, the whole channel gets bumped. When both channel targets coincide a run advances all fifteen packages at once; when they differ each channel advances on its own and the pointer-commit subject names the channel that moved.
+- One per-package skip guards writes, and it is the only one: a package whose pkgver already equals its target is skipped whole on a non-force run (no pkgver/pkgrel write, no `updpkgsums`, no `makepkg --printsrcinfo`, no commit), so a run that moves one channel does not reset the other channel's already-settled `pkgrel`. There is no run-level "nothing to do" gate: the loop always visits all fifteen packages, and the parent-pointer steps wait for `worked`, which only turns true once a commit exists.
 - `force` bypasses the per-package skip — the condition tests `!= "true"` and the loop reads it from the job env — so it is the only input that touches a package whose version has not moved.
 - The `force` input bumps `pkgrel` while keeping the version — used to push a checksum/hash refresh without a version change (`fix:` prefix, body lists nothing since no versions moved).
-- Mod requests sit *above* the per-package skip: a `pending` request holds a package the channel would otherwise move, and a `ready` one can make a run do work with no version moving. Blocking and applying are per package, so one held package does not stall the other six.
+- Mod requests sit *above* the per-package skip: a `pending` request holds a package the channel would otherwise move, and a `ready` one can make a run do work with no version moving. Blocking and applying are per package, so one held package does not stall the other fourteen.
 
 ## CI container quirks
 
