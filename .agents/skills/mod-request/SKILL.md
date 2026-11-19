@@ -17,7 +17,8 @@ description: 生成、校验并发布 mod-request issue（AUR 打包改动请求
 ## 硬规则
 
 - **单一实现**：issue 正文格式只由 `scripts/mod-request.py` 定义。永远不要手写或凭记忆拼格式；渲染、解析、哈希、校验都走它。
-- **锚点是 base semver**：`target_version` 形如 `1.20.0`，不带 `-pre` / `-test` 后缀。`1.20.0pre1` 与 `1.20.0` 同属一个版本家族，门禁按 `base(包目标版本) >= target_version` 触发——这正是 pre 先应用、stable 后跟上的原因。
+- **锚点是 base semver**：`target_version` 形如 `1.20.0`，不带 `-pre` / `-test` 后缀。`1.20.0pre1` 剥掉 `pre` 后缀就是 `1.20.0`，两者同 base，门禁按 `base(包目标版本) >= target_version` 触发——这正是 pre 先应用、stable 后跟上的原因。
+- **随下一次发版生效的请求，锚 z+1**：`target_version` 一律填当前最新正式版 z+1——已发布 `1.19.8` 就填 `1.19.9`。不预测上游下一版的实际版本号（1.19.9 还是 1.20.0 无所谓）：门禁是门槛不是精确匹配，上游跳到 `1.20.0` 照样命中。这类请求**不勾** `next_update`——等待由 `target_version` 自己的 not-due 检查完成（见下文），`next_update` 只留给「同 base 等待」这一种语义。
 - **无 backport**：AUR 只保留 `master` 一条分支，这是它的固有性质、不是本仓库的策略——唯一存在的 tip 就是当前版本，改动无处回溯。`target_version` 不得早于任一受影响包的当前目标版本；那等于声明一次无法表达的回溯。
 - **diff 不得触碰 `pkgver=` / `pkgrel=` / `.SRCINFO`**：这三样归 CI 独占。`check` 会拒绝。
 - **同一版本再改动：看 CI 有没有在这个 issue 上评论带签名的 applied record。** 没有（还没有任何包
@@ -40,8 +41,8 @@ description: 生成、校验并发布 mod-request issue（AUR 打包改动请求
 |---|---|---|
 | `supersedes` | issue 编号 | 仅当本请求取代一个同版本、已有 applied record 的旧请求时填，如 `#12`；否则留空 |
 | `summary` | 单行 | 改动目的 |
-| `target_version` | base semver | 这次改动适配的版本；门禁阈值 |
-| `next_update` | 复选框 | 勾上 = 不应用到当前已发布的版本，等该包下一次升版本时再启用 |
+| `target_version` | base semver | 这次改动适配的版本；门禁阈值。随下一次发版生效的请求填最新正式版 z+1（`1.19.8` → `1.19.9`），不预测上游下一版的实际版本号 |
+| `next_update` | 复选框 | 只在 `target_version` 与包已发布的版本同 base 时有意义：此时不勾，改动会立刻落到那个已发布版本上；勾上 = 不动已发布的版本，等该包升级到更高版本时再应用。z+1 锚定的请求不勾 |
 | `type` | 多选 `source` / `bin` | 源码构建 / 预编译二进制 |
 | `variant` | 多选 `common` / `compatible` | 常规构建 / `GOAMD64=v1` 兼容构建 |
 | `edition` | 多选 `standard` / `lite` | 常规版 / 轻量版（`bettbox-lite…` 8 个包） |
@@ -60,15 +61,23 @@ description: 生成、校验并发布 mod-request issue（AUR 打包改动请求
 `target_version`、新请求包含旧请求覆盖的全部包），通不过就是无效声明。CI 依据它决定关哪条、不应用
 哪条，所以填错比留空更糟：留空等于「两条并存的请求」，会被当成冲突。
 
-`next_update` 管的是 `target_version` 表达不了的那件事：当 `target_version` 正好等于某个包已所在版本的
-base semver（pre 通道常见——`1.20.0pre1` / `pre2` / `pre3` 是同一个 base）时，勾上它表示「别改已经发出去
-的那个版本，等下一个版本」。CI 的判定是：这条请求只在该包版本发生变动的那次运行里生效。
+`next_update` 只有一种用途：**anchor 与包已发布版本同 base 时，拦截「立即应用到当前版本」**。anchor 更高时
+运行走不到它（先被 not-due 检查拦下），更低时先死在 no-backport——所以只有当 anchor 正好等于某个包已发布的
+base 时，它才会被读到。
+勾上表示「别改已经发出去的那个版本，等该包升级到更高版本时再用」。以 `target_version: 1.19.9` 为例：
+stable 还在 `v1.19.8`（本来就等版本移动），pre 已在 `v1.19.9pre1`（base 已到 1.19.9，不勾就会立刻应用）；
+勾上后两者各自在自己的下一次升级落地——stable 在 `v1.19.9`，pre 在 `v1.19.9pre2`。换句话说，它的可观测
+效应只有一件事：**在已发布的版本上拦掉一次「只涨 `pkgrel` 的重新发布」**——版本不移动时 CI 的落地形态就是
+`pkgver` 不变、`pkgrel` +1，勾上即不做这次重发。CI 的判定是：这条请求只在该包版本发生变动的那次运行里
+生效。**随下一次发版生效的请求（z+1 锚定）不勾它**：等待由 `target_version` 自己的 not-due 检查完成，
+两层拦截不要叠用。
 
 **什么时候生效**由 `diff_state` 与 `next_update` 一起决定，逐包判定：`ready` 且未勾 `next_update` 时，
 只要某包已发布到 `target_version`（base 相等即算，`1.20.0pre3` 算到了 `1.20.0`），批准就立刻落地
-（作为 `pkgrel` 补丁）——审批入口先做一次内联预检，证明「现在落地不了」（`pending`、勾了
-`next_update`、版本还没到）的批准不会起管道，等该包升版本的那次运行或下一次 cron。CI 不保存计划，
-每次运行都从 issue 重新判定。
+（作为 `pkgrel` 补丁）；z+1 锚定的请求没有包已发布到 anchor，这一支永不触发——未到 anchor 的运行被
+not-due 检查拦住，等版本移动的那次运行随 bump 一起落地。审批入口先做一次内联预检，证明「现在落地不了」
+（`pending`、勾了 `next_update`、版本还没到）的批准不会起管道，等该包升级的那次运行或下一次 cron。
+CI 不保存计划，每次运行都从 issue 重新判定。
 
 正文里**每个包一段** `### payload: <pkgname>`，段内两个四反引号代码块（先 `diff` 后 `text`）。
 没被解析出来的包、以及 `pending` 状态下的所有包，该段留空即可。
@@ -81,13 +90,15 @@ base semver（pre 通道常见——`1.20.0pre1` / `pre2` / `pre3` 是同一个 
 ## 流程 A：改动尚未确定（先占位）
 
 适用：上游已发 breaking，适配还没写出来。目的是**立刻挡住版本推进**，避免 CI 把未适配的包推上通道。
+`target_version` 按规范填当前最新正式版 z+1（已发布 `1.19.8` → `1.19.9`）：breaking 随下一次发版而来，
+门槛就设在下一版，不猜上游把那一版叫什么号。
 
 ```sh
 # 1. 写数据文件（payload 留空）
 cat > /tmp/mr.json <<'JSON'
 {
   "summary": "上游 PR #159 把构建逻辑并入 setup.dart",
-  "target_version": "1.20.0",
+  "target_version": "1.19.9",
   "type": ["source"],
   "variant": ["common", "compatible"],
   "edition": ["standard"],
@@ -127,8 +138,8 @@ git -C aur/bettbox    diff > /tmp/bettbox.diff
 把每个包的 diff 与 `message` 写进数据文件。按 Conventional Commits 编写 `message`（首行
 `<type>(<pkg>): <what changed>`，正文说明原因），CI 再按包决定它的用法：
 
-- 该包本次不升版本（已经在 `target_version`）→ 直接作为那条 AUR 提交的提交信息；
-- 该包本次正要升到 `target_version` → 作为 `Update to v<ver>` 提交的正文。
+- 本次运行不动该包的版本（它已经在 `target_version`）→ 直接作为那条 AUR 提交的提交信息；
+- 本次运行正要升级到 `target_version` → 作为 `Update to v<ver>` 提交的正文。
 
 两种用法都读得通即可——同一条请求的两个通道可能分别落在两种情形（pre 先到、stable 后到），所以
 issue 格式上不把它拆成 title / body。
@@ -137,7 +148,7 @@ issue 格式上不把它拆成 title / body。
 {
   "supersedes": "#12",
   "summary": "适配上游 setup.dart --build-only",
-  "target_version": "1.20.0",
+  "target_version": "1.19.9",
   "type": ["source"],
   "variant": ["common"],
   "edition": ["standard"],
@@ -187,7 +198,7 @@ scripts/apply-mod-request.sh -f /tmp/mr.md --versions /tmp/targets.txt
 版本规则：包必须已到 `target_version`（或本次正被推进到它）、不得比它更新（无 backport）、勾了
 `next_update` 的请求不会重复落到已发布的版本上；不满足就跳过并说明原因。
 
-`--force` 忽略这条规则，**只给本地/手动用**——CI 以 live 模式调用（无 `-f`/issue）时不传它，live 模式也会直接拒绝它。
+`--force` 忽略这条规则（`next_update` 一并失效，因此它只配手动运行），**只给本地/手动用**——CI 以 live 模式调用（无 `-f`/issue）时不传它，live 模式也会直接拒绝它。
 落地后按脚本打印的提示跑 `updpkgsums` 与 `makepkg`，回滚命令也在输出里。
 
 ## 同一版本再改动
@@ -199,11 +210,11 @@ scripts/apply-mod-request.sh -f /tmp/mr.md --versions /tmp/targets.txt
 还没应用的包只在这里出现，且不带版本——它还没发布过任何东西：
 
 ```markdown
-<!-- mr-applied: {"applied":{"bettbox-pre":{"at":"2026-11-16T10:45:22Z","full":"1.20.0pre1-2"}},"issue":12,"kind":"applied","sig":"U1NIU0lH…","version":"1.20.0"} -->
-**Applied at v1.20.0** — 1 of 2 packages
+<!-- mr-applied: {"applied":{"bettbox-pre":{"at":"2026-11-16T10:45:22Z","full":"1.19.9pre1-2"}},"issue":12,"kind":"applied","sig":"U1NIU0lH…","version":"1.19.9"} -->
+**Applied at v1.19.9** — 1 of 2 packages
 
 - [ ] `bettbox`
-- [x] `bettbox-pre` — 1.20.0pre1-2
+- [x] `bettbox-pre` — 1.19.9pre1-2
 ```
 
 摘要行已经写明目标 base 版本，所以每行只在应用后标注**落地时的完整版本**（`pkgver-pkgrel`）；pre 与

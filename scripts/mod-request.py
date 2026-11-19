@@ -120,7 +120,7 @@ from pathlib import Path
 # The one thing a request may say about *when* it applies beyond target_version:
 # "not to the version that is already out".  GitHub's checkboxes control is a
 # multi-select, so a lone option is how a form spells a boolean.
-NEXT_UPDATE_OPTION = "不要应用到当前版本，等该包下一次升版本时再启用"
+NEXT_UPDATE_OPTION = "不要应用到当前版本，等该包下一次升级时再启用"
 
 SCALAR_FIELDS = [
     # The one declared relationship between requests.  A request for a version

@@ -42,21 +42,22 @@ body:
     id: target_version
     attributes:
       label: target_version
-      description: 本次改动适配的版本号，形如 1.20.0（不带 -pre/-test 后缀）。等于或高于这个 base 版本的包会使用本改动
+      description: 本次改动适配的 base 版本，形如 1.20.0（不带 -pre/-test 后缀）；等于或高于它的包会使用本改动。若这条请求随下一次发版生效，一律填当前最新正式版 z+1（已发布 1.19.8 → 填 1.19.9）——不必预测上游下一版的实际版本号，门禁按 base 比较，上游跳到 1.20.0 也照样命中
       placeholder: "1.20.0"
     validations:
       required: true
 
-  # 复选框（单个选项 = 布尔）。当 target_version 正好等于某包已在的 base 版本
-  # （pre 通道常见：1.20.0pre1/pre2/pre3 同 base）时，勾上表示"别动已经发出去的那个
-  # 版本，等该包下一次升版本再用这条请求"。
+  # 复选框（单个选项 = 布尔）。仅当 target_version 与某包已在的 base 版本相同
+  # （pre 通道常见：1.20.0pre1/pre2/pre3 同 base）时勾选，表示"别动已经发出去的那个
+  # 版本，等该包升级到更高版本时再用这条请求"。随下一次发版生效的请求（z+1 锚定）不勾：
+  # 未到 anchor 的运行本来就不会应用，那层拦截由 anchor 的门槛语义完成。
   - type: checkboxes
     id: next_update
     attributes:
       label: next_update
-      description: 勾上 = 不应用到当前已发布的版本，等该包下一次升版本时再启用
+      description: 只在 target_version 与包已发布的版本同 base 时有意义：此时不勾，改动会立刻落到那个已发布版本上；勾上 = 不动已发布的版本，等该包升级到更高版本时再应用（如 target_version 1.19.9，stable 在 v1.19.8、pre 在 v1.19.9pre1 时，分别会在 v1.19.9 与 v1.19.9pre2 应用）。随下一次发版生效的请求（z+1 锚定）不要勾
       options:
-        - label: 不要应用到当前版本，等该包下一次升版本时再启用
+        - label: 不要应用到当前版本，等该包下一次升级时再启用
 
   # 选包是 3 个多选维度，不是包名列表。具体包由脚本按 aur/* 里实际存在的包解析：
   # 通道不在维度里——一条请求同时覆盖 stable 与 pre 的孪生包，各自到达 target_version
