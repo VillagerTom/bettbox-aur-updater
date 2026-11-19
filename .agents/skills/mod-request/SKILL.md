@@ -7,30 +7,22 @@ description: 生成、校验并发布 mod-request issue（AUR 打包改动请求
 
 一个 **mod request**（下文 M-R）是对 `aur/*` 打包内容的改动请求。它同时承担三件事：
 
-1. **版本门禁**——存在一条覆盖某包、且 `target_version` ≤ 该包目标版本的 open M-R 时，`update-aur` 不得把该包推进到那个版本（与 `diff_state` 无关）。
+1. **版本门禁**——存在一条覆盖某包、且 `target_version` ≤ 该包本次要推进到的版本的 open M-R 时，`update-aur` 不得把该包推进到那个版本（与 `diff_state` 无关）。
 2. **内容载体**——`diff_state: ready` 时携带每包的 diff 与提交信息，供 CI 应用。
-3. **进度记录**——CI 每次应用更改就重写那条带签名的 **applied record** 评论：文首是一行隐藏的
-   HTML 注释，装着记录内容与它的 SSH 签名；紧跟一行可见的进度说明，下面是整个包选集的勾选列表
-   （已应用的逐行标注应用后的完整版本）；它覆盖的包全部应用后关闭 issue。注释、摘要行、勾选列表
-   都属于这条记录，但只有签名能证明这条记录出自 CI——摘要与勾选是签名里 `applied` 的渲染。
+3. **进度记录**——CI 每次应用更改就重写那条带签名的 **applied record** 评论（隐藏注释 + 可见进度 +
+   勾选列表），它覆盖的包全部应用后关闭 issue；只有签名能证明它出自 CI。用法见「同一版本再改动」。
 
 ## 硬规则
 
-- **单一实现**：issue 正文格式只由 `scripts/mod-request.py` 定义。永远不要手写或凭记忆拼格式；渲染、解析、哈希、校验都走它。
-- **锚点是发行版本号**（release version）：`target_version` 形如 `1.20.0`，不带 `-pre` / `-test` 后缀——即版本里去掉预发布标记的部分（SemVer 的 normal version、PEP 440 的 release segment）。`1.20.0pre1` 的发行版本号是 `1.20.0`，两者发行版本号相同，门禁按 `发行版本号(包目标版本) >= target_version` 触发——这正是 pre 先应用、stable 后跟上的原因。
-- **「发行版本号变动」不同于「版本变动」**：前者是发行版本号前进（`1.19.8` → `1.19.9`）；后者是 `pkgver` 的任何变化，包括发行版本号不变的 `1.19.9pre1` → `1.19.9pre2`。锚定 z+1 的请求等的是前者，`next_update` 等的是后者——两个词不混用。
-- **随下一个发行版本号生效的请求，锚 z+1**：`target_version` 一律填当前最新正式版的发行版本号 z+1——已发布 `1.19.8` 就填 `1.19.9`。不预测上游下一个发行版本号的实际值（1.19.9 还是 1.20.0 无所谓）：门禁是门槛不是精确匹配，上游跳到 `1.20.0` 照样命中。这类请求**不勾** `next_update`——等待由 `target_version` 自己的 not-due 检查完成（见下文），`next_update` 只留给「发行版本号相同、等下一次版本变动」这一种语义。
-- **无 backport**：AUR 只保留 `master` 一条分支，这是它的固有性质、不是本仓库的策略——唯一存在的 tip 就是当前版本，改动无处回溯。`target_version` 不得早于任一受影响包的当前目标版本；那等于声明一次无法表达的回溯。
-- **diff 不得触碰 `pkgver=` / `pkgrel=` / `.SRCINFO`**：这三样归 CI 独占。`check` 会拒绝。
-- **同一版本再改动：看 CI 有没有在这个 issue 上评论带签名的 applied record。** 没有（还没有任何包
-  被应用）→ **原地改正文**。有（哪怕只应用了一个包）→ **另开新 issue**，并在新 issue 的 `supersedes`
-  里填旧 issue 编号。判据是**签名**：勾选与摘要是这条记录的组成部分（签名里 `applied` 的渲染），
-  手改它们不会让记录变成「已应用」，也骗不过门禁。
-- **一个包集同时只有一条 live 请求**：diff 只对一个树状态定义，格式没有「基于另一条请求」的表达——
-  两个 open + `approved` 的请求若解析出同一个包（无论版本、无论 `pending` 还是 `ready`），后批准的会
-  被 gate 拒绝，否则第二个的基树是歧义的，落地时要么 hunk 对不上、要么落上一个没人构建过的组合。前一条
-  落地并关闭（或在新请求的 `supersedes` 里声明）之后才能批准下一条。**版本不在判据里**：同版本但包集
-  不相交的请求互不影响（`bin` 修与 `source` 修可以并行，同一轮各自落地）。
+- **单一实现**：issue 正文格式只由 `scripts/mod-request.py` 定义。不要手写或凭记忆拼格式；渲染、解析、哈希、校验都走它。
+- **无 backport**：AUR 只保留 `master` 一条分支，唯一存在的 tip 就是当前版本，改动无处回溯。`target_version` 不得低于任一受影响包的发行版本号。
+- **diff 不得触碰 `pkgver=` / `pkgrel=` / `.SRCINFO` / `.nvchecker.toml`**：版本与元数据归 CI 独占，`check` 会拒绝（理由见「范围限制」）。
+- **同一版本再改动，先看 applied record**：没有记录 → 原地改正文；有记录（哪怕只应用了一个包）→
+  另开新 issue 并在 `supersedes` 里填旧编号。该填而留空，就是两条并存的请求，会被当成冲突。
+  操作见「同一版本再改动」。
+- **一个包集同时只有一条 live 请求**：两条请求的 diff 都针对同一个树状态，格式没有「基于另一条请求」
+  的表达，叠加起来要么 hunk 对不上、要么落上没人构建过的组合。前一条落地关闭、或被 `supersedes` 取代
+  之后才能批准下一条。**版本不在判据里**：同版本但包集不相交的请求互不影响。
 
 ## 前置
 
@@ -38,12 +30,17 @@ description: 生成、校验并发布 mod-request issue（AUR 打包改动请求
 
 ## 数据模型
 
+`target_version` 是**发行版本号**（release version）：版本去掉预发布标记后的部分，即 SemVer 的
+normal version / PEP 440 的 release segment——`1.19.9pre1` 的发行版本号是 `1.19.9`。两个词要分开：
+**发行版本号变动**指它前进（`1.19.8` → `1.19.9`），**版本变动**指 `pkgver` 的任何变化，含发行版本号
+不变的 `1.19.9pre1` → `1.19.9pre2`。z+1 锚定等的是前者，`next_update` 等的是后者。
+
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `supersedes` | issue 编号 | 仅当本请求取代一个同版本、已有 applied record 的旧请求时填，如 `#12`；否则留空 |
 | `summary` | 单行 | 改动目的 |
-| `target_version` | 发行版本号 | 这次改动适配的发行版本号；门禁阈值。随下一个发行版本号生效的请求填当前最新正式版的发行版本号 z+1（`1.19.8` → `1.19.9`），不预测上游下一个发行版本号的实际值 |
-| `next_update` | 复选框 | 只在 `target_version` 与包已发布的发行版本号相同时有意义：此时不勾，改动会立刻落到那个已发布版本上；勾上 = 不动已发布的版本，等该包下一次版本变动时再应用。z+1 锚定的请求不勾 |
+| `target_version` | 发行版本号 | 这次改动适配的发行版本号；门禁阈值。随下一个发行版本号生效的请求填当前最新正式版的发行版本号 z+1（`1.19.8` → `1.19.9`），不预测上游的实际值 |
+| `next_update` | 复选框 | 只在 `target_version` 与包已发布的发行版本号相同时可勾。不勾：改动立刻落到那个已发布版本；勾上：等该包下一次版本变动再应用。z+1 锚定的请求不勾 |
 | `type` | 多选 `source` / `bin` | 源码构建 / 预编译二进制 |
 | `variant` | 多选 `common` / `compatible` | 常规构建 / `GOAMD64=v1` 兼容构建 |
 | `edition` | 多选 `standard` / `lite` | 常规版 / 轻量版（`bettbox-lite…` 8 个包） |
@@ -57,42 +54,27 @@ description: 生成、校验并发布 mod-request issue（AUR 打包改动请求
 `bin` + `common` + `standard` 只解析出 `bettbox-pre-bin`（stable 的 `bettbox-bin` 是另一位维护者的包，
 不在本仓库）；同样的选择把 `edition` 换成 `lite` 则解析出 `bettbox-lite-bin` 与 `bettbox-lite-pre-bin`。
 
-`supersedes` 是正文里唯一能声明的**关系**：一个版本已经部分应用、需要再改时，不是编辑旧 issue，而是
-另开一条并把旧编号写在这里。它只是声明，不是权限——取代关系由 `supersede` 校验（同
-`target_version`、新请求包含旧请求覆盖的全部包），通不过就是无效声明。CI 依据它决定关哪条、不应用
-哪条，所以填错比留空更糟：留空等于「两条并存的请求」，会被当成冲突。
+`next_update` 的意义用一个例子就够：`target_version: 1.19.9`，stable 停在 `v1.19.8`、pre 已在
+`v1.19.9pre1`。勾上后两者各自在自己的下一次版本变动落地——stable 在 `v1.19.9`，pre 在 `v1.19.9pre2`；
+不勾则 pre 会立刻被重发一次（`pkgver` 不变、`pkgrel` +1）。它只在这一种情况下读得到：`target_version`
+与包已发布的发行版本号相同。
 
-`next_update` 只有一种用途：**anchor 与包已发布版本的发行版本号相同时，拦截「立即应用到当前版本」**。anchor
-的发行版本号更高时运行走不到它（先被 not-due 检查拦下），更低时先死在 no-backport——所以只有当 anchor 正好等于
-某个包已发布的发行版本号时，它才会被读到。
-勾上表示「别改已经发出去的那个版本，等该包下一次版本变动时再用」。以 `target_version: 1.19.9` 为例：
-stable 还在 `v1.19.8`（发行版本号还没到，本来就等它变动），pre 已在 `v1.19.9pre1`（发行版本号已到 1.19.9，
-不勾就会立刻应用）；勾上后两者各自在自己的下一次版本变动落地——stable 在 `v1.19.9`，pre 在 `v1.19.9pre2`。
-换句话说，它的可观测效应只有一件事：**在已发布的版本上拦掉一次「只涨 `pkgrel` 的重新发布」**——版本不变动时
-CI 的落地形态就是 `pkgver` 不变、`pkgrel` +1，勾上即不做这次重发。CI 的判定是：这条请求只在该包版本变动的
-那次运行里生效。**随下一个发行版本号生效的请求（z+1 锚定）不勾它**：等待由 `target_version` 自己的 not-due
-检查完成，两层拦截不要叠用。
-
-**什么时候生效**由 `diff_state` 与 `next_update` 一起决定，逐包判定：`ready` 且未勾 `next_update` 时，
-只要某包已发布到 `target_version`（发行版本号相等即算，`1.20.0pre3` 算到了 `1.20.0`），批准就立刻落地
-（作为 `pkgrel` 补丁）；z+1 锚定的请求没有包已发布到 anchor，这一支永不触发——未到 anchor 的运行被
-not-due 检查拦住，等版本变动的那次运行随 bump 一起落地。审批入口先做一次内联预检，证明「现在落地不了」
-（`pending`、勾了 `next_update`、版本还没到）的批准不会起管道，等该包版本变动的那次运行或下一次 cron。
-CI 不保存计划，每次运行都从 issue 重新判定。
+**什么时候生效**：`ready` 且未勾 `next_update` 时，只要某个包已发布到 `target_version`（发行版本号相等
+即算，`1.20.0pre3` 算到了 `1.20.0`），批准就立刻落地，形态是 `pkgrel` 补丁；z+1 锚定的请求没有包已发布到
+anchor，于是等版本变动的那次运行。批准只表示许可，落不落地由运行时的版本状态决定——CI 每次运行都从
+issue 重新判定，不保存计划。
 
 正文里**每个包一段** `### payload: <pkgname>`，段内两个四反引号代码块（先 `diff` 后 `text`）。
 没被解析出来的包、以及 `pending` 状态下的所有包，该段留空即可。
 
-**哈希只覆盖会影响结果的部分**（`BOUND_FIELDS`）：三个维度、`target_version`、`next_update`、
-`diff_state`、`supersedes`，以及每包的 diff 与 `message`。`summary` 与 `evidence` 不进哈希——
-它们是给人看的，改错字不需要重新 approve。反过来说，任何改变 CI 动作、或改变 AUR 收到内容的修改
-都要重新 approve，包括 diff 里改一行、`message` 改一句。
+**哈希只覆盖会影响结果的部分**：三个维度、`target_version`、`next_update`、`diff_state`、`supersedes`，
+以及每包的 diff 与 `message`。`summary` 与 `evidence` 不进哈希，改错字不需要重新 approve；任何改变 AUR
+内容的修改都要重新 approve。
 
 ## 流程 A：改动尚未确定（先占位）
 
 适用：上游已发 breaking，适配还没写出来。目的是**立刻挡住版本推进**，避免 CI 把未适配的包推上通道。
-`target_version` 按规范填当前最新正式版的发行版本号 z+1（已发布 `1.19.8` → `1.19.9`）：breaking 要随下一个
-发行版本号落地，门槛就先设在那里，不猜上游把那个版本号叫什么。
+`target_version` 按 z+1 规则填（见「数据模型」）：breaking 要随下一个发行版本号落地，门槛先设在那里。
 
 ```sh
 # 1. 写数据文件（payload 留空）
@@ -117,7 +99,7 @@ gh issue create --title "[mod] setup.dart --build-only" --body-file /tmp/mr.md
 
 > 不需要标签：请求靠正文格式识别，`approved` 由维护者审批时加上。所以第三方也能走同一条命令，
 > 或直接用 [Issue Form](../../../.github/ISSUE_TEMPLATE/mod-request.yml)；两条路径产出的正文
-> 是同一格式，最终都在同一个 gate 汇合。想让浏览 issue 列表的人一眼认出，标题保持 `[mod] ` 前缀。
+> 是同一格式，也过同一套校验。想让浏览 issue 列表的人一眼认出，标题保持 `[mod] ` 前缀。
 
 想确认这次选择会选中哪些包，看 `python3 "$S" resolve -f /tmp/mr.md`。
 
@@ -133,8 +115,8 @@ git -C aur/bettbox    diff > /tmp/bettbox.diff
 # git -C aur/bettbox-pre restore .
 ```
 
-一项选择同时覆盖 stable 与 pre 一对孪生包，所以两个包都要有自己的 diff——它们的 `PKGBUILD`
-本来就不是同一份文件（`pkgname`、`_pkgver`、`conflicts` 等都不同）。
+一条请求覆盖 stable 与 pre 两个包，而它们的 `PKGBUILD` 本来就不是同一份文件（`pkgname`、`_pkgver`、
+`conflicts` 等都不同），所以每个包都要有自己的 diff。
 
 把每个包的 diff 与 `message` 写进数据文件。按 Conventional Commits 编写 `message`（首行
 `<type>(<pkg>): <what changed>`，正文说明原因），CI 再按包决定它的用法：
@@ -179,7 +161,7 @@ gh issue create --title "[mod] <summary>" --body-file /tmp/mr.md
 
 ## 本地预演：把请求落到工作区
 
-`scripts/apply-mod-request.sh` 既是 CI 的判定与落地实现，也是本地落地入口——同一份版本规则，没有第二处：
+`scripts/apply-mod-request.sh` 是本地落地/预演入口（CI 也用同一个脚本）：
 
 ```sh
 # 读 issue，应用到它覆盖的所有包；工作区保持 dirty，便于随后 build
@@ -196,19 +178,13 @@ scripts/apply-mod-request.sh -f /tmp/mr.md --versions /tmp/targets.txt
 
 `/tmp/targets.txt` 每行 `<包> <当前> <目标>`。没有 `--versions` 时按 PKGBUILD 里的 `pkgver` 视为不动。
 
-版本规则：包必须已到 `target_version`（或本次正被推进到它）、不得比它更新（无 backport）、勾了
-`next_update` 的请求不会重复落到已发布的版本上；不满足就跳过并说明原因。
-
-`--force` 忽略这条规则（`next_update` 一并失效，因此它只配手动运行），**只给本地/手动用**——CI 以 live 模式调用（无 `-f`/issue）时不传它，live 模式也会直接拒绝它。
-落地后按脚本打印的提示跑 `updpkgsums` 与 `makepkg`，回滚命令也在输出里。
+版本规则与 CI 相同：包已到 `target_version`（或本次正被推进到它）、不比它新（无 backport）、勾了
+`next_update` 的请求不重复落到已发布的版本；不满足就跳过并说明原因。`--force` 忽略这条规则，**只给本地
+手动用**（live 模式会直接拒绝它）。落地后按输出提示跑 `updpkgsums` 与 `makepkg`，回滚命令也在里面。
 
 ## 同一版本再改动
 
-判据只有一条：**CI 有没有在这个 issue 上评论带签名的 applied record**。每次应用更改，CI 重写这条
-评论一次：文首是一行隐藏注释，写着 issue、目标发行版本号、已应用的包与各自时间和各自应用后的
-完整版本，并附一段覆盖这些内容的 SSH 签名；下面一行是可见的进度说明，再往下是整个包选集的勾选
-列表——它是签名里 `applied` 的渲染。
-还没应用的包只在这里出现，且不带版本——它还没发布过任何东西：
+判据是 applied record 的有无，不是正文写了什么。记录长这样：
 
 ```markdown
 <!-- mr-applied: {"applied":{"bettbox-pre":{"at":"2026-11-16T10:45:22Z","full":"1.19.9pre1-2"}},"issue":12,"kind":"applied","sig":"U1NIU0lH…","version":"1.19.9"} -->
@@ -218,8 +194,11 @@ scripts/apply-mod-request.sh -f /tmp/mr.md --versions /tmp/targets.txt
 - [x] `bettbox-pre` — 1.19.9pre1-2
 ```
 
-摘要行已经写明目标发行版本号，所以每行只在应用后标注**落地时的完整版本**（`pkgver-pkgrel`）；pre 与
-stable 到同一个发行版本号时是两个不同的构建，这里显示的是各自实际发出的那个。
+CI 每次应用更改重写它一次：隐藏注释里是记录与 SSH 签名，然后一行可见的进度，再往下是整个包选集的
+勾选列表（还没应用的包只在这里出现，且不带版本）。摘要行已经写明目标发行版本号，所以每行只在应用后
+标注**落地时的完整版本**（`pkgver-pkgrel`）——pre 与 stable 到同一个发行版本号时是两个不同的构建，
+显示的是各自实际发出的那个。签名只认 CI 的密钥；勾选与摘要是签名里 `applied` 的渲染，手改它们不改变
+记录。
 
 要确认这条记录是不是伪造：
 
@@ -236,9 +215,6 @@ python3 "$S" applied --issue "$n" --body /tmp/body.md --comments /tmp/comments.j
 |---|---|
 | 没有 applied record | **原地改正文**。改完在 issue 里评论一句：请求已修改，请重新审批（正文一改，原来的批准记录就失效了） |
 | 已有 applied record（M-R 已被至少一个包应用） | **另开新 issue** 取代它 |
-
-「已有 applied record」也是取代能成立的前提：旧 issue 上没有这条记录时，它还没有任何包被应用，
-`supersedes` 指向它会被拒——那时应当原地改正文。
 
 改包集、撤包、改 diff 都是正文改动，走同一条判据，没有例外路径。另开新 issue 时：
 
@@ -270,8 +246,8 @@ python3 "$S" resolve -f /tmp/body.md    # 这条请求实际覆盖哪些包，�
 python3 "$S" target -f /tmp/body.md     # 只打印 target_version（旧正文缺字段也能读）
 ```
 
-`check` 通过只说明正文**结构**合法，它不判断 `supersedes` 指向的是不是真关系（那需要 issue 数据，
-脚本离线）。判断只有一处实现：
+`check` 通过只说明正文**结构**合法：`supersedes` 指向的关系需要 issue 数据，由 `gate` 判定，脚本离线时
+读不到：
 
 ```sh
 python3 "$S" gate --issue <n> --body /tmp/body.md \
@@ -281,8 +257,7 @@ python3 "$S" gate --issue <n> --body /tmp/body.md \
 ```
 
 `--open-approved` 是「已经占用了某个版本的请求」名单（`[{number, body}]`），`--old` 是被 `supersedes`
-点名的那个 issue（`{number, body, state, comments}`）。审批与应用都调用它，所以同一份正文不会出现
-「批的时候合法、用的时候不合法」；CI 侧用 `--no-close`（关闭只发生在批准取代时）。
+点名的那个 issue（`{number, body, state, comments}`）。
 
 ## 范围限制：能改哪些文件
 
@@ -295,7 +270,7 @@ payload 里装的是 `git -C aur/<pkg> diff` 的原样输出，路径以**该包
 | `.nvchecker.toml` | 决定版本来源；仓库规则要求它与 PKGBUILD 由 CI 同推 |
 | 符号链接 / 子模块（mode `120000` / `160000`）、`.git/` 下任何路径、绝对路径、`..` | `git apply` 照做，但打包改动永远不需要 |
 
-`pkgver=` / `pkgrel=` 由 CI 写，`check` 会拒绝（见硬规则）。
+版本行（`pkgver=` / `pkgrel=`）同样归 CI 写，`check` 会拒绝。
 
 ## 自检
 
