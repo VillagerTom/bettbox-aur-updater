@@ -138,6 +138,24 @@ body:
       required: false
 
   - type: textarea
+    id: payload-bettbox-bin
+    attributes:
+      label: "payload: bettbox-bin"
+      description: 仅当该包被 type/variant/edition 选中且 diff_state=ready 时填写；两个四反引号代码块，先 diff 后提交信息。diff 可改该包目录下任意文件（.SRCINFO、.nvchecker.toml 除外），不得创建符号链接
+      placeholder: |
+        ````diff
+        --- a/PKGBUILD
+        +++ b/PKGBUILD
+        @@ ...
+        ````
+
+        ````text
+        fix(pkg): ...
+        ````
+    validations:
+      required: false
+
+  - type: textarea
     id: payload-bettbox-compatible
     attributes:
       label: "payload: bettbox-compatible"

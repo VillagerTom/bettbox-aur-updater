@@ -49,10 +49,10 @@ normal version / PEP 440 的 release segment——`1.19.9pre1` 的发行版本�
 | `payload: <pkg>` | 每包一段 | 该包的 diff + `message`；仅 `ready` 时非空 |
 
 **包不直接列出来**，由三个维度按 `aur/*` 里实际存在的包解析：`bettbox[-lite][-compatible][-pre][-bin]`。
-通道不在维度里——一选就是 stable 与 pre 两个孪生包，各自到达 `target_version` 时生效。
-所以选 `source` + `common` + `standard` 会解析出 `bettbox` 与 `bettbox-pre` 两个包；选
-`bin` + `common` + `standard` 只解析出 `bettbox-pre-bin`（stable 的 `bettbox-bin` 是另一位维护者的包，
-不在本仓库）；同样的选择把 `edition` 换成 `lite` 则解析出 `bettbox-lite-bin` 与 `bettbox-lite-pre-bin`。
+通道不在维度里——一选就是 stable 与 pre 两个孪生包，各自到达 `target_version` 时生效。所以选
+`source` + `common` + `standard` 会解析出 `bettbox` 与 `bettbox-pre`；选 `bin` + `common` + `standard`
+则是 `bettbox-bin` 与 `bettbox-pre-bin`；同样的选择把 `edition` 换成 `lite` 则解析出
+`bettbox-lite-bin` 与 `bettbox-lite-pre-bin`。
 
 `next_update` 的意义用一个例子就够：`target_version: 1.19.9`，stable 停在 `v1.19.8`、pre 已在
 `v1.19.9pre1`。勾上后两者各自在自己的下一次版本变动落地——stable 在 `v1.19.9`，pre 在 `v1.19.9pre2`；

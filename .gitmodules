@@ -43,3 +43,6 @@
 [submodule "aur/bettbox-lite-compatible-pre-bin"]
 	path = aur/bettbox-lite-compatible-pre-bin
 	url = ssh://aur@aur.archlinux.org/bettbox-lite-compatible-pre-bin.git
+[submodule "aur/bettbox-bin"]
+	path = aur/bettbox-bin
+	url = ssh://aur@aur.archlinux.org/bettbox-bin.git

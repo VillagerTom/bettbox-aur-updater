@@ -2,13 +2,14 @@
 
 [**Bettbox**](https://github.com/appshubcc/Bettbox) 相关 AUR 包的管理仓库，使用 CI 自动维护版本更新。
 
-AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，分 **stable / pre 双通道**、**standard / lite 两个版本系列**，共 15 个包。
+AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，分 **stable / pre 双通道**、**standard / lite 两个版本系列**，共 16 个包。
 
-**standard（7 个）**
+**standard（8 个）**
 
 | AUR 包 | 通道 | 架构 | 类型 | 子模块路径 |
 |--------|------|------|------|-----------|
 | [bettbox](https://aur.archlinux.org/packages/bettbox) | stable | x86_64 / aarch64 | 源码构建 | `aur/bettbox/` |
+| [bettbox-bin](https://aur.archlinux.org/packages/bettbox-bin) | stable | x86_64 / aarch64 | 预编译二进制 | `aur/bettbox-bin/` |
 | [bettbox-compatible](https://aur.archlinux.org/packages/bettbox-compatible) | stable | x86_64 | 源码构建（`GOAMD64=v1`） | `aur/bettbox-compatible/` |
 | [bettbox-compatible-bin](https://aur.archlinux.org/packages/bettbox-compatible-bin) | stable | x86_64 | 预编译二进制 | `aur/bettbox-compatible-bin/` |
 | [bettbox-pre](https://aur.archlinux.org/packages/bettbox-pre) | pre | x86_64 / aarch64 | 源码构建 | `aur/bettbox-pre/` |
@@ -30,11 +31,10 @@ AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，分 **stable / pre 
 | [bettbox-lite-compatible-pre-bin](https://aur.archlinux.org/packages/bettbox-lite-compatible-pre-bin) | pre | x86_64 | 预编译二进制（`compatible-lite.deb`） | `aur/bettbox-lite-compatible-pre-bin/` |
 
 - **pre 通道是 stable 的超集**：两个通道各自独立解析上游——stable 只认正式 tag，pre 同时认正式 tag 和 `-pre` tag 并取版本号最大者。
-- **同通道内原子更新**：一个通道内的包永远同一版本；两通道互不干扰。stable 通道 7 包，pre 通道 8 包。
-- 15 包安装结构一致（`usr/lib/bettbox`、`usr/bin/bettbox` 软链、`provides=bettbox=$pkgver`），且互相 `conflicts`（每个包都列出其余 15 个兄弟包），同一时间只能安装其一。
+- **同通道内原子更新**：一个通道内的包永远同一版本；两通道互不干扰。stable 通道 8 包，pre 通道 8 包。
+- 16 包安装结构一致（`usr/lib/bettbox`、`usr/bin/bettbox` 软链），且互相 `conflicts`（每个包都列出其余 15 个兄弟包），同一时间只能安装其一。
 - `compatible` 后缀表示用 `GOAMD64=v1` 构建。`GOAMD64` 是 amd64 专属的微架构级别，所以 compatible 系列（含 lite）只有 x86_64，不提供 aarch64 包。
 - **lite** 是另一个版本系列：源码包在 `setup.dart linux` 上加 `--lite`，构建标签换成 `no_easytier,no_tailscale,no_zerotier,no_fake_tcp,with_low_memory`，Flutter 侧再带 `--dart-define=APP_LITE=true`；bin 包直接取对应的 lite deb。
-- `bettbox-bin` 是另一维护者（lyj404）的包，本仓库的 15 个包均与其 `conflicts`。
 
 ## 工作流程
 
