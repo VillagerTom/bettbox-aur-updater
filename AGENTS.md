@@ -10,7 +10,7 @@ The package inventory (sixteen `aur/*/` submodules, stable / pre channels, stand
 
 - The channel is the `*-pre` pkgname suffix (no suffix = stable).
 - The edition is the `-lite` token, which sits directly after `bettbox` and leaves the rest of the name in its usual order (`bettbox-lite-compatible-pre-bin`). A lite package resolves from the same tags as its standard twin, so a channel bump covers both editions.
-- All sixteen packages install into one layout (`usr/lib/bettbox`, `usr/bin/bettbox` symlink), and every package's `conflicts` names the other fifteen siblings. Keep new packages consistent with that, and never shorten the list.
+- All sixteen packages normalize to one install layout (`usr/lib/bettbox`, `usr/bin/bettbox` symlink) and `provides=bettbox=<ver>` (each name's own suffix stripped), and every package's `conflicts` names the other fifteen siblings. Keep new packages consistent with that, and never shorten the list.
 - Each `aur/<pkg>` is a git submodule at `ssh://aur@aur.archlinux.org/<pkgname>.git`; README's 子模块管理 has the clone/add commands.
 
 ### Multi-arch `-bin` packages and `${arch}` in per-arch sources

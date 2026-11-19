@@ -32,7 +32,7 @@ AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，分 **stable / pre 
 
 - **pre 通道是 stable 的超集**：两个通道各自独立解析上游——stable 只认正式 tag，pre 同时认正式 tag 和 `-pre` tag 并取版本号最大者。
 - **同通道内原子更新**：一个通道内的包永远同一版本；两通道互不干扰。stable 通道 8 包，pre 通道 8 包。
-- 16 包安装结构一致（`usr/lib/bettbox`、`usr/bin/bettbox` 软链），且互相 `conflicts`（每个包都列出其余 15 个兄弟包），同一时间只能安装其一。
+- 16 包安装结构一致（`usr/lib/bettbox`、`usr/bin/bettbox` 软链、`provides=bettbox=$pkgver`），且互相 `conflicts`（每个包都列出其余 15 个兄弟包），同一时间只能安装其一。
 - `compatible` 后缀表示用 `GOAMD64=v1` 构建。`GOAMD64` 是 amd64 专属的微架构级别，所以 compatible 系列（含 lite）只有 x86_64，不提供 aarch64 包。
 - **lite** 是另一个版本系列：源码包在 `setup.dart linux` 上加 `--lite`，构建标签换成 `no_easytier,no_tailscale,no_zerotier,no_fake_tcp,with_low_memory`，Flutter 侧再带 `--dart-define=APP_LITE=true`；bin 包直接取对应的 lite deb。
 
