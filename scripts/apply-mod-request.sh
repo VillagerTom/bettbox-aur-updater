@@ -48,9 +48,9 @@ is applied in turn (the update run's shape).
                    reached target_version, is already past it, or would get a
                    next_update request on a version already published.  Manual
                    only; the update run never passes it.
-  --versions FILE  per package "<pkg> <current> <target>" lines.  The target is
-                   the version the run moves the package to; without the file, a
-                   package is taken to stay on its PKGBUILD pkgver.
+  --versions FILE  per package "<pkg> <current> <target>" lines: what the run
+                   sees the package publishing and where it moves it.  Without
+                   the file the package sits on its PKGBUILD pkgver and stays.
   --repo OWNER/REPO  repository to read (default: what gh infers from origin)
   -h, --help       this text
 
@@ -229,13 +229,15 @@ if [ "$next_update" = true ]; then
 fi
 
 # The version rule: a request is anchored to a base version, so a package the
-# request is not (yet or any more) about is skipped rather than patched.  The
-# target comes from --versions (the version the run moves the package to);
-# without it the package stays where it is.
-declare -A run_tgt=()
+# request is not (yet or any more) about is skipped rather than patched.
+# --versions supplies both halves of the run's state: what the run sees the
+# package publishing (the rule is judged against that) and where the run moves
+# it.  Without the file the package sits on its PKGBUILD pkgver and stays there.
+declare -A run_cur=() run_tgt=()
 if [ -n "$versions" ]; then
-  while read -r p _c t; do
+  while read -r p c t; do
     [ -n "$p" ] || continue
+    run_cur["$p"]=$c
     run_tgt["$p"]=$t
   done < "$versions"
 fi
@@ -245,8 +247,13 @@ eligible=()
 for pkg in "${targets[@]}"; do
   sub="$root/aur/$pkg"
   [ -d "$sub" ] || die "no such package directory: aur/$pkg"
-  cur=$(sed -n 's/^pkgver=//p' "$sub/PKGBUILD")
-  [ -n "$cur" ] || die "aur/$pkg: cannot read pkgver from PKGBUILD"
+  tree_cur=$(sed -n 's/^pkgver=//p' "$sub/PKGBUILD")
+  [ -n "$tree_cur" ] || die "aur/$pkg: cannot read pkgver from PKGBUILD"
+  # The vector decides what counts as published; the tree only has to take the
+  # patch.  Reading the tree here instead used to rehearse a different state
+  # than the one asked for, silently: a vector saying a package already sits on
+  # an anchor's base judged it as "moves to the anchor" and applied it.
+  cur=${run_cur[$pkg]:-$tree_cur}
   tgt=${run_tgt[$pkg]:-$cur}
   why=""
   if [ "$(vercmp "$(base_of "$cur")" "$target_version")" -gt 0 ]; then
