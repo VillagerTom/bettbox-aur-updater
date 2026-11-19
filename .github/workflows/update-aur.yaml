@@ -360,8 +360,8 @@ jobs:
               exit 1
             fi
             mr_body_of["$num"]=$mr_body
-            # The request's base version, not what a channel published: it names
-            # the family in the parent commit subject.
+            # The request's release version, not what a channel published: it
+            # names the version in the parent commit subject.
             mr_base_of["$num"]=$(python3 "$GITHUB_WORKSPACE/scripts/mod-request.py" \
               --root "$GITHUB_WORKSPACE" target -f "$mr_body")
           done
@@ -518,8 +518,8 @@ jobs:
               # list once.
               if [ -n "$mr_issue" ]; then
                 # The record names the build the change landed in, not the
-                # request's base version: the two channels reach one base as
-                # different pkgver-pkgrel pairs.
+                # request's release version: the two channels reach one release
+                # version as different pkgver-pkgrel pairs.
                 full_ver=$(sed -n 's/^pkgver=//p' PKGBUILD)-$(sed -n 's/^pkgrel=//p' PKGBUILD)
                 echo "$pkgname=$full_ver" >> "/tmp/aur-mr-applied-$mr_issue.txt"
               fi
@@ -593,7 +593,7 @@ jobs:
 
               # Completeness is read back from the record: it says what any run
               # has, so a request covering both channels closes once both builds
-              # are in it (the two channels reach one base version as separate
+              # are in it (the two channels reach one release version as separate
               # builds).  `applied` is the same evaluator the gate uses, so a
               # tick nobody can verify never closes anything.
               gh api "repos/$GITHUB_REPOSITORY/issues/$num/comments" \

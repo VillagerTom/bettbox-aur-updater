@@ -19,7 +19,7 @@
 #   #mr-held <pkg> <issue>      the package must not move: still pending
 #   #mr-applied <pkg> <issue>   the payload was written into aur/<pkg>
 #
-# A request is anchored to a base version, so applying it has a version rule: a
+# A request is anchored to a release version, so applying it has a version rule: a
 # package must have reached target_version (or be moved to it by the run the
 # request belongs to), must not be newer than it, and a `next_update` request
 # must not be re-applied to the version already published.  The approval gate
@@ -228,7 +228,7 @@ if [ "$next_update" = true ]; then
   printf 'note: next_update is ticked — the update run applies this only from the next version on\n'
 fi
 
-# The version rule: a request is anchored to a base version, so a package the
+# The version rule: a request is anchored to a release version, so a package the
 # request is not (yet or any more) about is skipped rather than patched.
 # --versions supplies both halves of the run's state: what the run sees the
 # package publishing (the rule is judged against that) and where the run moves

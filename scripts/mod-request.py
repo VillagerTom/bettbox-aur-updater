@@ -38,11 +38,11 @@ Each `payload: <pkgname>` section carries exactly two fenced blocks, in order:
     ````
 
 `next_update` answers the one timing question `target_version` cannot: when
-`target_version` equals the base semver a package already sits on -- routine in
-the pre channel, where `1.20.0pre1`, `pre2`, `pre3` share one base -- a ticked
-box means "do not touch the version that is out now; wait for the next one".
-CI reads it as: this request never applies in a run that does not move that
-package's version.
+`target_version` equals the release version a package already sits on -- routine
+in the pre channel, where `1.20.0pre1`, `pre2`, `pre3` share one release version
+-- a ticked box means "do not touch the version that is out now; wait for the
+next version change".  CI reads it as: this request never applies in a run that
+does not move that package's version.
 
 The hash used for approvals is not the hash of the markdown: `hash` parses the
 body first and then sha256s a canonical projection of the fields CI consumes
@@ -80,7 +80,7 @@ How that message is spent is CI's call, per package: a package already at
 `target_version` gets it as the whole commit message, and a package this run is
 bringing to `target_version` gets it as the body of the `Update to v<ver>`
 commit.  One request can hold both cases at once -- pre and stable reach the same
-base version at different times -- so the format keeps a single message per
+release version at different times -- so the format keeps a single message per
 package and does not split it into a title and a body.
 
 A diff may touch any file of that AUR package except `.SRCINFO` and
@@ -120,7 +120,7 @@ from pathlib import Path
 # The one thing a request may say about *when* it applies beyond target_version:
 # "not to the version that is already out".  GitHub's checkboxes control is a
 # multi-select, so a lone option is how a form spells a boolean.
-NEXT_UPDATE_OPTION = "不要应用到当前版本，等该包下一次升级时再启用"
+NEXT_UPDATE_OPTION = "不要应用到当前版本，等该包下一次版本变动时再启用"
 
 SCALAR_FIELDS = [
     # The one declared relationship between requests.  A request for a version
@@ -189,8 +189,8 @@ BULLET = re.compile(r"^\s*-\s*(?!\[)(.+?)\s*$")
 CHECKBOX = re.compile(r"^\s*-\s*\[([ xX])\]\s*(.+?)\s*$")
 TARGET_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 # What a package actually publishes after an application: pkgver-pkgrel, e.g.
-# "1.20.0pre1-2".  The base version is in the record's summary line; this is the
-# exact build the change landed in.
+# "1.20.0pre1-2".  The release version is in the record's summary line; this is
+# the exact build the change landed in.
 PKG_FULL = re.compile(r"^\d[0-9A-Za-z._+]*-\d+$")
 PKGVER_LINE = re.compile(r"^[+-](pkgver|pkgrel)=")
 LONG_FENCE = re.compile(r"^`{4,}", re.M)
@@ -639,7 +639,7 @@ def validate(data: dict, packages: list[str]) -> list[str]:
     v = data.get("target_version") or ""
     if not TARGET_VERSION.match(v):
         errs.append(
-            f"target_version must be a base semver like 1.20.0 (no pre/test suffix), got {v!r}"
+            f"target_version must be a release version like 1.20.0 (no pre/test suffix), got {v!r}"
         )
 
     flag = data.get("next_update")
@@ -840,7 +840,7 @@ def check_form(form_path: Path, packages: list[str]) -> list[str]:
 
 # --- the gate: is a declared `supersedes` legal? --------------------------
 # A body may claim to replace another issue.  The claim only means something if
-# the old request exists, is the same base version, covers no package this one
+# the old request exists, is the same release version, covers no package this one
 # drops, and has already been applied to some package.  That is a rule about
 # issue data, not about markdown, so it lives here once and both enforcers feed it
 # what they fetched: `approve-mod-request.sh` when it pins a body, CI when it
@@ -888,7 +888,7 @@ def supersede_verdict(new: dict, old: dict, packages: list[str]) -> tuple[int, s
 # answer that -- anyone can type one -- and the comment's author is only a guess
 # about account metadata.  So CI posts one record comment per issue and rewrites
 # it as it applies packages: the signature sits on its first line, naming the
-# issue, the base version, and which packages were applied, when, and in which
+# issue, the release version, and which packages were applied, when, and in which
 # build (`1.20.0pre1-2`), and the tasklist below renders that as progress.  The
 # tick is for reading; the signature is what the gate reads.
 #
@@ -1045,11 +1045,11 @@ def record_comment(payload: dict, covered: list[str]) -> str:
     signed `applied` field names them, so the rendering cannot drift from the
     credential: rewriting one without re-signing the other is refused.
 
-    The summary line carries the base version the request targets; an applied
+    The summary line carries the release version the request targets; an applied
     row adds the full version it landed in (`1.20.0pre1-2`), because the two
-    channels reach that base as different builds and only one of them has been
-    applied at a time.  An unapplied row names no version at all -- nothing has
-    been released for it yet.
+    channels reach that release version as different builds and only one of them
+    has been applied at a time.  An unapplied row names no version at all --
+    nothing has been released for it yet.
     """
     applied = payload["applied"]
     done = sum(1 for pkg in covered if pkg in applied)
@@ -1449,7 +1449,7 @@ def main() -> int:
         data = parse(read_text(args.body), packages)
         version = args.version or data["target_version"]
         if not TARGET_VERSION.match(version):
-            die(f"--version must be a base semver like 1.20.0, got {version!r}")
+            die(f"--version must be a release version like 1.20.0, got {version!r}")
         try:
             comments = json.loads(read_text(args.comments))
         except json.JSONDecodeError as exc:
@@ -1496,7 +1496,7 @@ def main() -> int:
         covered = resolve_pkgs(data, packages)
         version = args.version or data["target_version"]
         if not TARGET_VERSION.match(version):
-            die(f"--version must be a base semver like 1.20.0, got {version!r}")
+            die(f"--version must be a release version like 1.20.0, got {version!r}")
         if version != data["target_version"]:
             die(
                 f"--version {version} is not this request's target_version "
