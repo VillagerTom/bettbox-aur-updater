@@ -135,7 +135,7 @@ Routine version bumps go through CI; any manual change follows **one uniform flo
 
 - **Fetch AUR origin first and check for drift** — `git -C aur/<pkg> fetch origin` (AUR is the submodule's origin). Compare AUR HEAD with the parent's recorded pointer: `git rev-parse HEAD:aur/<pkg>` vs `git -C aur/<pkg> rev-parse origin/master`. If they differ, the parent is behind AUR — **trigger `sync-from-aur.yaml` before editing**, so you start from the current AUR state instead of a stale pointer.
 - Work in a clean `aur/<pkg>` worktree (or a separate AUR clone). Submodules sit in detached HEAD — that's fine for edits: commit and push while detached (`git push origin HEAD:master`), no branch switch needed; if not checked out, `git submodule update --init aur/<pkg>`. Mechanics in "Submodules run detached HEAD".
-- Tools (Arch host or container, run as **non-root** user): `makepkg` (pacman) and `updpkgsums` (pacman-contrib) — makepkg refuses to run as root; `bash -n` needs only bash. CI does the same work as the throwaway `builder` user inside the container.
+- Tools (Arch host or container, run as **non-root** user): `makepkg` (pacman), `updpkgsums` (pacman-contrib) and `namcap` (the `namcap` package) — makepkg refuses to run as root; `bash -n` needs only bash. CI does the same work as the throwaway `builder` user inside the container.
 - Publishing needs the AUR SSH key + keyscanned known_hosts in `$HOME/.ssh` (`aur`, `known_hosts`) — the material CI provisions in Job container; locally it must live in your own `$HOME/.ssh`.
 - Keep the channel consistent: a `*-pre` package's pkgver must equal what its own `.nvchecker.toml` resolves to, spelled `1.19.4` for a formal tag and `1.19.4pre1` for a `-pre` one. The spelling follows the resolved target, and `APP_ENV` follows the pkgver — see [Version model](#version-model).
 
@@ -144,8 +144,9 @@ Routine version bumps go through CI; any manual change follows **one uniform flo
 1. Edit the PKGBUILD — either in a separate AUR clone, or inside `aur/<pkg>` (mechanics in "Submodules run detached HEAD").
 2. If `source=` changed, refresh hashes with `updpkgsums` (re-downloads every source incl. the arch-specific arrays, rewrites `sha256sums`).
 3. Regenerate metadata: `makepkg --printsrcinfo > .SRCINFO` — never hand-edit `.SRCINFO`.
-4. Sanity-check: `bash -n PKGBUILD`.
-5. Commit with a conventional message and push to AUR (`git push` from a separate clone, or `git -C aur/<pkg> push origin HEAD:master`).
+4. Sanity-check: `bash -n PKGBUILD` (plus any `*.install` you touched), then `namcap PKGBUILD` — namcap's exit status is always 0 (judge by the output lines), and its `W: Reference to x86_64 should be changed to $CARCH` on the multi-arch recipes is a false positive, since `$CARCH`/`${arch}` would be wrong there.
+5. When the change can affect what lands in the package, build it and lint the payload: `makepkg`, then `namcap <pkgname>-<pkgver>-<pkgrel>-<arch>.pkg.tar.zst`. For a `-bin` package that is only the deb extraction; a source package really compiles, so skip this when the recipe change cannot reach the payload. `src/`, `pkg/` and `*.pkg.tar.*` are gitignored.
+6. Commit with a conventional message and push to AUR (`git push` from a separate clone, or `git -C aur/<pkg> push origin HEAD:master`).
 
 **Sync the parent pointer — always `sync-from-aur`, never a manual parent commit:**
 

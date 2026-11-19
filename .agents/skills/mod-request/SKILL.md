@@ -118,6 +118,11 @@ git -C aur/bettbox    diff > /tmp/bettbox.diff
 一条请求覆盖 stable 与 pre 两个包，而它们的 `PKGBUILD` 本来就不是同一份文件（`pkgname`、`_pkgver`、
 `conflicts` 等都不同），所以每个包都要有自己的 diff。
 
+每个包改完、取 diff 之前，按 AGENTS.md 的「Manually editing AUR packages」做同样的检查：
+`bash -n PKGBUILD`、`namcap PKGBUILD`；改动够得着包内容时再 `makepkg`，然后
+`namcap <pkgname>-<pkgver>-<pkgrel>-<arch>.pkg.tar.zst`。`check` 与 `apply-mod-request.sh`
+只验证 diff 的结构和能否应用，写坏的 `PKGBUILD` 要到 CI 跑 `makepkg` 才暴露。
+
 把每个包的 diff 与 `message` 写进数据文件。按 Conventional Commits 编写 `message`（首行
 `<type>(<pkg>): <what changed>`，正文说明原因），CI 再按包决定它的用法：
 
