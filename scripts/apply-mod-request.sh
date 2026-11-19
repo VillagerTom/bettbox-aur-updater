@@ -286,8 +286,11 @@ targets=("${eligible[@]}")
 declare -a rels=() bumps=() files_of=()
 for pkg in "${targets[@]}"; do
   sub="$root/aur/$pkg"
-  # Starting from a clean tree is what makes the printed undo command exact.
-  [ -z "$(git -C "$sub" status --porcelain)" ] ||
+  # Starting from a clean tree is what makes the printed undo command exact, so
+  # only a real apply has to start clean: a dry run writes nothing and prints no
+  # undo, and refusing it there kept the one safe way to look at a request off a
+  # tree that already carried local work.
+  [ "$dry_run" -eq 1 ] || [ -z "$(git -C "$sub" status --porcelain)" ] ||
     die "aur/$pkg has local changes; commit or restore them first (this step has to be revertible)"
 
   diff="$cdir/$pkg.diff"
