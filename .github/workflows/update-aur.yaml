@@ -84,7 +84,7 @@ jobs:
         # same makepkg/sed/awk the package will be built with (lilac-style).
         # nodejs is required by JavaScript Actions (actions/checkout) in an
         # Actions container job. nvchecker resolves the channel targets,
-        # pacman-contrib carries updpkgsums and vercmp; python runs the
+        # pacman-contrib carries updpkgsums; python runs the
         # mod-request scripts; github-cli reads and records the issues.
         # A full system upgrade in the same transaction is mandatory: the
         # rolling repos move ahead of the base image, and installing packages
@@ -242,61 +242,18 @@ jobs:
           fi
           echo "Source cache names: $(wc -l < /tmp/aur-cache-names.txt) entries, one URL each"
 
-          # Baseline: current versions, captured before any update (feeds the
-          # parent-pointer message body as the "old" side of each row) and used
-          # for channel consistency.
-          for sub in aur/*/; do
-            echo "$(sed -n 's/^pkgname=//p' "$sub/PKGBUILD")=$(sed -n 's/^pkgver=//p' "$sub/PKGBUILD")"
-          done > /tmp/aur-old-vers.txt
-
-          # Channel consistency: stable and pre are independent version series,
-          # so each channel is checked separately and a single inconsistent
-          # channel drives the `fix: sync ... in <channel> channel` subject
-          # (both -> plain subject, "all packages" already covers every channel).
-          inconsistent=false
-          in_stable=false
-          in_pre=false
-          [ "$(awk -F= '$1 !~ /-pre/ {print $2}' /tmp/aur-old-vers.txt | sort -u | wc -l)" -gt 1 ] &&
-            in_stable=true
-          [ "$(awk -F= '$1 ~ /-pre/ {print $2}' /tmp/aur-old-vers.txt | sort -u | wc -l)" -gt 1 ] &&
-            in_pre=true
-          if $in_stable && $in_pre; then
-            inconsistent=both
-          elif $in_stable; then
-            inconsistent=stable
-          elif $in_pre; then
-            inconsistent=pre
-          fi
-          echo "inconsistent=$inconsistent" >> "$GITHUB_OUTPUT"
-
-          # The run's version: the highest target.  Targets are pkgver-form (no
-          # hyphen), so the Arch comparator vercmp (the same one makepkg/pacman
-          # use) applies directly: it ranks a formal release above its
-          # same-numbered pre-releases.  (`sort -V` would get this backwards:
-          # v1.19.4-pre3 > v1.19.4.)
-          top_tag=""
-          while read -r _pkg _current target; do
-            if [ -z "$top_tag" ] || [ "$(vercmp "$target" "$top_tag")" -gt 0 ]; then
-              top_tag="$target"
-            fi
-          done < /tmp/aur-targets.txt
-          echo "version=$top_tag" >> "$GITHUB_OUTPUT"
-
           # Versions come from the targets resolved above; what a live request
           # does to a package comes from the script's own decision, read below.
           force=${FORCE:-false}
           dry_run=${DRY_RUN:-false}
           worked=false
 
-          # Rows appended for every package whose version actually moves; the
-          # parent-pointer message body lists these as `pkg: v<old> -> v<new>`.
-          : > /tmp/aur-updated.txt
-          # Request applications, in both shapes: the readable row for the parent
-          # message, and a machine row (issue, version, package) that decides the
-          # subject.  A request-only run moves no version, so it needs a subject
-          # of its own.
-          : > /tmp/aur-mr-rows.txt
-          : > /tmp/aur-mod-requests.txt
+          # One row per package this run commits, appended right after its AUR
+          # push: `<pkg>\t<old pkgver-pkgrel>\t<new pkgver-pkgrel>\t<mod request
+          # issue or empty>`.  The parent-pointer message renders one line per
+          # row, so a version bump, a force hash refresh and a request-only
+          # pkgrel bump all reach the parent history in the same shape.
+          : > /tmp/aur-committed.txt
 
           # --- Let the script decide and apply ------------------------------
           # One call does the whole judgement: it lists the live requests (open,
@@ -405,6 +362,10 @@ jobs:
             echo "Updating: $pkgname to v${new_ver}${label}"
             echo "========================================="
 
+            # The full version this package publishes now, before any patch:
+            # the old side of this run's parent-pointer line.
+            old_full="${current_pkgver}-$(sed -n 's/^pkgrel=//p' PKGBUILD)"
+
             # --- Patch PKGBUILD ---
             # A request's diff landed before this loop, while the package was
             # still the tree it was written against, so no hunk has to match a
@@ -502,14 +463,11 @@ jobs:
                 fi
                 git commit -F "$pkg_msg"
                 worked=true
-                if [ "$new_ver" != "$current_pkgver" ]; then
-                  echo "${pkgname}: v${current_pkgver} -> v${new_ver}" >> /tmp/aur-updated.txt
-                fi
-                if [ -n "$mr_issue" ]; then
-                  echo "${pkgname}: v${new_ver} (mod request #${mr_issue})" >> /tmp/aur-mr-rows.txt
-                  printf '%s\t%s\t%s\n' "$mr_issue" "${mr_base_of[$mr_issue]}" "$pkgname" \
-                    >> /tmp/aur-mod-requests.txt
-                fi
+                # The row is read back from the PKGBUILD as pushed, so every
+                # pkgrel path (version move, force, request) lands in it.
+                new_full="$(sed -n 's/^pkgver=//p' PKGBUILD)-$(sed -n 's/^pkgrel=//p' PKGBUILD)"
+                printf '%s\t%s\t%s\t%s\n' "$pkgname" "$old_full" "$new_full" "$mr_issue" \
+                  >> /tmp/aur-committed.txt
                 GIT_SSH_COMMAND="ssh -i $HOME/.ssh/aur -o IdentitiesOnly=yes -o UserKnownHostsFile=$HOME/.ssh/known_hosts" git push origin HEAD:master
               fi
               # The record is written once per issue after the loop: it may only
@@ -700,58 +658,24 @@ jobs:
         id: pointer
         if: steps.check.outputs.worked == 'true' && env.DRY_RUN != 'true'
         env:
-          VERSION: ${{ steps.check.outputs.version }}
-          INCONSISTENT: ${{ steps.check.outputs.inconsistent }}
           GIT_NAME: ${{ secrets.GIT_NAME }}
           GIT_EMAIL: ${{ secrets.GIT_EMAIL }}
         run: |
           set -euo pipefail
-          force=${FORCE:-false}
-          # VERSION is the pkgver form (1.19.4pre1). Commit subjects keep that
-          # spelling and just add the v prefix — one version shape in both AUR
-          # and GitHub history (no tag re-expansion).
-          #
-          # The body lists what moved.  A request-only run moves no version, so
-          # /tmp/aur-updated.txt is empty and the subject names the requests.
-          if [ "$force" = "true" ]; then
-            # Force reuses the currently resolved targets; no version change,
-            # so no update list in the body.
-            subject="fix: force update source hashes of v${VERSION}"
-            : > /tmp/aur-pointer-body.txt
-          elif [ -s /tmp/aur-updated.txt ]; then
-            case "${INCONSISTENT:-false}" in
-              stable|pre) subject="fix: sync all packages to v${VERSION} in $INCONSISTENT channel" ;;
-              both)       subject="fix: sync all packages to v${VERSION}" ;;
-              *)          subject="Update to v${VERSION}" ;;
-            esac
-            cp /tmp/aur-updated.txt /tmp/aur-pointer-body.txt
-          else
-            mapfile -t mr_rows < /tmp/aur-mod-requests.txt
-            mapfile -t mr_issues < <(printf '%s\n' "${mr_rows[@]}" | cut -f1 | sort -un)
-            mapfile -t mr_versions < <(printf '%s\n' "${mr_rows[@]}" | cut -f2 | sort -u)
-            mapfile -t mr_pkgs < <(printf '%s\n' "${mr_rows[@]}" | cut -f3 | sort -u)
-            list=$(printf '#%s, ' "${mr_issues[@]}")
-            list=${list%, }
-            if [ "${#mr_issues[@]}" -eq 1 ] && [ "${#mr_pkgs[@]}" -eq 1 ] &&
-              [ "${#mr_versions[@]}" -eq 1 ]; then
-              subject="fix(${mr_pkgs[0]}): apply mod request #${mr_issues[0]} at v${mr_versions[0]}"
-            elif [ "${#mr_versions[@]}" -eq 1 ]; then
-              subject="fix: apply mod requests ${list} at v${mr_versions[0]}"
-            else
-              subject="fix: apply mod requests ${list}"
+          # One line per package this run committed, in loop order.  Version
+          # moves and request applications render as a single row --
+          # "<pkg>: <old>-<rel> -> <new>-<rel>", plus the request that carried
+          # the change when one was applied -- so a version bump, a force hash
+          # refresh and a request-only pkgrel bump all land in the same shape
+          # and the lines themselves say which packages moved and to what.
+          : > /tmp/aur-commit-msg.txt
+          while IFS=$'\t' read -r pkgname old_full new_full mr_issue; do
+            line="${pkgname}: ${old_full} -> ${new_full}"
+            if [ -n "$mr_issue" ]; then
+              line="${line} (with mod request #${mr_issue})"
             fi
-            : > /tmp/aur-pointer-body.txt
-          fi
-          # Applied requests append their rows whatever moved, so a version bump
-          # that carried one still records it.
-          cat /tmp/aur-mr-rows.txt >> /tmp/aur-pointer-body.txt
-          {
-            echo "$subject"
-            if [ -s /tmp/aur-pointer-body.txt ]; then
-              echo ""
-              cat /tmp/aur-pointer-body.txt
-            fi
-          } > /tmp/aur-commit-msg.txt
+            printf '%s\n' "$line" >> /tmp/aur-commit-msg.txt
+          done < /tmp/aur-committed.txt
 
           # Manual (workflow_dispatch) runs sign the parent-pointer commit as
           # the owner; automated ones leave committer unset so it follows
