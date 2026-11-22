@@ -1,6 +1,6 @@
 ---
 name: mod-request
-description: 生成、校验并发布 mod-request issue（AUR 打包改动请求），或解析/审计已有 issue。用于上游 breaking change 适配、多人协作提案，以及按版本号锚定、pre 与正式版按各自节奏应用的打包修改。
+description: 生成、校验并发布 mod-request issue（AUR 打包改动请求），或解析/审计已有 issue。发布前必须由用户预览确认。用于上游 breaking change 适配、多人协作提案，以及按版本号锚定、pre 与正式版按各自节奏应用的打包修改。
 ---
 
 # mod-request
@@ -15,6 +15,10 @@ description: 生成、校验并发布 mod-request issue（AUR 打包改动请求
 ## 硬规则
 
 - **单一实现**：issue 正文格式只由 `scripts/mod-request.py` 定义。不要手写或凭记忆拼格式；渲染、解析、哈希、校验都走它。
+- **发布前先让用户预览**：`render` 出的正文就是将要发布的内容。必须把它交给用户过目——正文不长时
+  完整贴出，长时给出文件路径并列出字段与各包 diff 的要点，确认用户已经看过——得到明确同意后才执行
+  `gh issue create`；用 `gh issue edit` 改写已发布请求的正文、或关闭被取代的 issue 同样先预览。不得先
+  发布再补预览，也不得替用户决定发布。
 - **无 backport**：AUR 只保留 `master` 一条分支，唯一存在的 tip 就是当前版本，改动无处回溯。`target_version` 不得低于任一受影响包的发行版本号。
 - **diff 不得触碰 `pkgver=` / `pkgrel=` / `.SRCINFO` / `.nvchecker.toml`**：版本与元数据归 CI 独占，`check` 会拒绝（理由见「范围限制」）。
 - **同一版本再改动，先看 applied record**：没有记录 → 原地改正文；有记录（哪怕只应用了一个包）→
@@ -90,10 +94,12 @@ cat > /tmp/mr.json <<'JSON'
 }
 JSON
 
-# 2. 渲染 + 校验 + 发布（脚本位于仓库根 scripts/ 下）
+# 2. 渲染 + 校验
 S=scripts/mod-request.py
 python3 "$S" render -d /tmp/mr.json > /tmp/mr.md
 python3 "$S" check -f /tmp/mr.md
+
+# 3. 把 /tmp/mr.md 交给用户预览，确认后才发布
 gh issue create --title "[mod] setup.dart --build-only" --body-file /tmp/mr.md
 ```
 
@@ -161,8 +167,12 @@ issue 格式上不把它拆成 title / body。
 S=scripts/mod-request.py
 python3 "$S" render -d /tmp/mr.json > /tmp/mr.md
 python3 "$S" check -f /tmp/mr.md          # 必过；失败不要发
+
+# 发布前把 /tmp/mr.md 交给用户预览（字段、每包 diff 与 message），确认后再执行
 gh issue create --title "[mod] <summary>" --body-file /tmp/mr.md
 ```
+
+预览是发布前的最后一道人工关口：`check` 只保证结构合法，用户看的是改动本身是否就是他想要的。
 
 ## 本地预演：把请求落到工作区
 
@@ -218,7 +228,7 @@ python3 "$S" applied --issue "$n" --body /tmp/body.md --comments /tmp/comments.j
 
 | 状态 | 做法 |
 |---|---|
-| 没有 applied record | **原地改正文**。改完在 issue 里评论一句：请求已修改，请重新审批（正文一改，原来的批准记录就失效了） |
+| 没有 applied record | **原地改正文**（先把新正文给用户预览，确认后再 `gh issue edit`）。改完在 issue 里评论一句：请求已修改，请重新审批（正文一改，原来的批准记录就失效了） |
 | 已有 applied record（M-R 已被至少一个包应用） | **另开新 issue** 取代它 |
 
 改包集、撤包、改 diff 都是正文改动，走同一条判据，没有例外路径。另开新 issue 时：
@@ -287,6 +297,8 @@ python3 scripts/mod-request.py \
   check-form --form .github/ISSUE_TEMPLATE/mod-request.yml
 ```
 
+- 发布动作（`gh issue create` / `gh issue edit` / 关闭被取代的 issue）之前，用户已经看过 `render`
+  后的正文并明确同意；预览不是可选的收尾，而是发布前的最后一步。
 - 常见失败：`target_version` 带了 `pre` 后缀；
   `payload` 缺包或多包（选了没写、写了没选）；diff 改了 `pkgver`/`pkgrel`；
   `message` 缺失或以空行开头；内容里出现 4 个以上反引号的行；`summary`/`evidence` 里出现行首
