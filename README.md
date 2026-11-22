@@ -8,12 +8,12 @@ AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，分 **stable / pre 
 
 | AUR 包 | 通道 | 架构 | 类型 | 子模块路径 |
 |--------|------|------|------|-----------|
-| [bettbox](https://aur.archlinux.org/packages/bettbox) | stable | x86_64 / aarch64 | 源码构建 | `aur/bettbox/` |
+| [bettbox](https://aur.archlinux.org/packages/bettbox) | stable | x86_64 / aarch64 | 源码构建（`--standard`） | `aur/bettbox/` |
 | [bettbox-bin](https://aur.archlinux.org/packages/bettbox-bin) | stable | x86_64 / aarch64 | 预编译二进制 | `aur/bettbox-bin/` |
-| [bettbox-compatible](https://aur.archlinux.org/packages/bettbox-compatible) | stable | x86_64 | 源码构建（`GOAMD64=v1`） | `aur/bettbox-compatible/` |
+| [bettbox-compatible](https://aur.archlinux.org/packages/bettbox-compatible) | stable | x86_64 | 源码构建（`GOAMD64=v1` + `--standard`） | `aur/bettbox-compatible/` |
 | [bettbox-compatible-bin](https://aur.archlinux.org/packages/bettbox-compatible-bin) | stable | x86_64 | 预编译二进制 | `aur/bettbox-compatible-bin/` |
-| [bettbox-pre](https://aur.archlinux.org/packages/bettbox-pre) | pre | x86_64 / aarch64 | 源码构建 | `aur/bettbox-pre/` |
-| [bettbox-compatible-pre](https://aur.archlinux.org/packages/bettbox-compatible-pre) | pre | x86_64 | 源码构建（`GOAMD64=v1`） | `aur/bettbox-compatible-pre/` |
+| [bettbox-pre](https://aur.archlinux.org/packages/bettbox-pre) | pre | x86_64 / aarch64 | 源码构建（`--standard`） | `aur/bettbox-pre/` |
+| [bettbox-compatible-pre](https://aur.archlinux.org/packages/bettbox-compatible-pre) | pre | x86_64 | 源码构建（`GOAMD64=v1` + `--standard`） | `aur/bettbox-compatible-pre/` |
 | [bettbox-compatible-pre-bin](https://aur.archlinux.org/packages/bettbox-compatible-pre-bin) | pre | x86_64 | 预编译二进制 | `aur/bettbox-compatible-pre-bin/` |
 | [bettbox-pre-bin](https://aur.archlinux.org/packages/bettbox-pre-bin) | pre | x86_64 / aarch64 | 预编译二进制 | `aur/bettbox-pre-bin/` |
 
@@ -21,20 +21,20 @@ AUR 包以 git 子模块形式托管在 `aur/*/` 目录下，分 **stable / pre 
 
 | AUR 包 | 通道 | 架构 | 类型 | 子模块路径 |
 |--------|------|------|------|-----------|
-| [bettbox-lite](https://aur.archlinux.org/packages/bettbox-lite) | stable | x86_64 / aarch64 | 源码构建（`--lite`） | `aur/bettbox-lite/` |
-| [bettbox-lite-bin](https://aur.archlinux.org/packages/bettbox-lite-bin) | stable | x86_64 / aarch64 | 预编译二进制（`-lite.deb`） | `aur/bettbox-lite-bin/` |
-| [bettbox-lite-compatible](https://aur.archlinux.org/packages/bettbox-lite-compatible) | stable | x86_64 | 源码构建（`GOAMD64=v1` + `--lite`） | `aur/bettbox-lite-compatible/` |
-| [bettbox-lite-compatible-bin](https://aur.archlinux.org/packages/bettbox-lite-compatible-bin) | stable | x86_64 | 预编译二进制（`compatible-lite.deb`） | `aur/bettbox-lite-compatible-bin/` |
-| [bettbox-lite-pre](https://aur.archlinux.org/packages/bettbox-lite-pre) | pre | x86_64 / aarch64 | 源码构建（`--lite`） | `aur/bettbox-lite-pre/` |
-| [bettbox-lite-pre-bin](https://aur.archlinux.org/packages/bettbox-lite-pre-bin) | pre | x86_64 / aarch64 | 预编译二进制（`-lite.deb`） | `aur/bettbox-lite-pre-bin/` |
-| [bettbox-lite-compatible-pre](https://aur.archlinux.org/packages/bettbox-lite-compatible-pre) | pre | x86_64 | 源码构建（`GOAMD64=v1` + `--lite`） | `aur/bettbox-lite-compatible-pre/` |
-| [bettbox-lite-compatible-pre-bin](https://aur.archlinux.org/packages/bettbox-lite-compatible-pre-bin) | pre | x86_64 | 预编译二进制（`compatible-lite.deb`） | `aur/bettbox-lite-compatible-pre-bin/` |
+| [bettbox-lite](https://aur.archlinux.org/packages/bettbox-lite) | stable | x86_64 / aarch64 | 源码构建（lite，默认） | `aur/bettbox-lite/` |
+| [bettbox-lite-bin](https://aur.archlinux.org/packages/bettbox-lite-bin) | stable | x86_64 / aarch64 | 预编译二进制（默认 `.deb`） | `aur/bettbox-lite-bin/` |
+| [bettbox-lite-compatible](https://aur.archlinux.org/packages/bettbox-lite-compatible) | stable | x86_64 | 源码构建（`GOAMD64=v1`，lite） | `aur/bettbox-lite-compatible/` |
+| [bettbox-lite-compatible-bin](https://aur.archlinux.org/packages/bettbox-lite-compatible-bin) | stable | x86_64 | 预编译二进制（`compatible.deb`） | `aur/bettbox-lite-compatible-bin/` |
+| [bettbox-lite-pre](https://aur.archlinux.org/packages/bettbox-lite-pre) | pre | x86_64 / aarch64 | 源码构建（lite，默认） | `aur/bettbox-lite-pre/` |
+| [bettbox-lite-pre-bin](https://aur.archlinux.org/packages/bettbox-lite-pre-bin) | pre | x86_64 / aarch64 | 预编译二进制（默认 `.deb`） | `aur/bettbox-lite-pre-bin/` |
+| [bettbox-lite-compatible-pre](https://aur.archlinux.org/packages/bettbox-lite-compatible-pre) | pre | x86_64 | 源码构建（`GOAMD64=v1`，lite） | `aur/bettbox-lite-compatible-pre/` |
+| [bettbox-lite-compatible-pre-bin](https://aur.archlinux.org/packages/bettbox-lite-compatible-pre-bin) | pre | x86_64 | 预编译二进制（`compatible.deb`） | `aur/bettbox-lite-compatible-pre-bin/` |
 
 - **pre 通道是 stable 的超集**：两个通道各自独立解析上游——stable 只认正式 tag，pre 同时认正式 tag 和 `-pre` tag 并取版本号最大者。
 - **同通道内原子更新**：一个通道内的包永远同一版本；两通道互不干扰。stable 通道 8 包，pre 通道 8 包。
 - 16 包安装结构一致（`usr/lib/bettbox`、`usr/bin/bettbox` 软链、`provides=bettbox=$pkgver`），且互相 `conflicts`（每个包都列出其余 15 个兄弟包），同一时间只能安装其一。
 - `compatible` 后缀表示用 `GOAMD64=v1` 构建。`GOAMD64` 是 amd64 专属的微架构级别，所以 compatible 系列（含 lite）只有 x86_64，不提供 aarch64 包。
-- **lite** 是另一个版本系列：源码包在 `setup.dart linux` 上加 `--lite`，构建标签换成 `no_easytier,no_tailscale,no_zerotier,no_fake_tcp,with_low_memory`，Flutter 侧再带 `--dart-define=APP_LITE=true`；bin 包直接取对应的 lite deb。
+- **standard / lite** 是上游的两个版本系列：lite 是默认（core 用 `no_easytier,no_tailscale,no_zerotier,no_fake_tcp,with_low_memory` 标签，app 不定义 `APP_STANDARD`）；standard 需显式请求——源码包在 `setup.dart linux` 上加 `--standard`、Flutter 侧带 `--dart-define=APP_STANDARD=true`，bin 包取带 `-standard` 后缀的 deb。上游自 v1.19.9 起用这套开关取代了 `--lite` / `APP_LITE`。
 
 ## 工作流程
 
